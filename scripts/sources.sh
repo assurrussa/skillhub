@@ -5,11 +5,10 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$repo_root/scripts/lib.sh"
 
 usage() {
-  cat <<'EOF'
-Usage:
-  sh scripts/sources.sh list
-  sh scripts/sources.sh sync [source-name]
-EOF
+  printf '%s\n' \
+    'Usage:' \
+    '  sh scripts/sources.sh list' \
+    '  sh scripts/sources.sh sync [source-name]'
 }
 
 skillhub_validate_sources_file

@@ -5,21 +5,37 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$repo_root/scripts/lib.sh"
 
 usage() {
-  cat <<'EOF'
-Usage:
-  sh scripts/skills.sh list
-  sh scripts/skills.sh search <query>
-  sh scripts/skills.sh install <skill-name>...
-  sh scripts/skills.sh install --all
-EOF
+  printf '%s\n' \
+    'Usage:' \
+    '  sh scripts/skills.sh list [--tsv]' \
+    '  sh scripts/skills.sh search [--tsv] <query>' \
+    '  sh scripts/skills.sh install <skill-name>...' \
+    '  sh scripts/skills.sh install --all'
 }
 
 skillhub_validate_sources_file
 
+is_valid_skill_name() {
+  case "$1" in
+    ''|*[!a-z0-9_-]*)
+      return 1
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
 list_catalogs() {
   query="${1:-}"
-  printf '%-20s %-28s %-16s %s\n' "source" "name" "category" "description"
-  printf '%-20s %-28s %-16s %s\n' "--------------------" "----------------------------" "----------------" "-----------"
+  format="${2:-table}"
+
+  if [ "$format" = "tsv" ]; then
+    printf 'source\tname\tcategory\ttriggers\tdescription\n'
+  else
+    printf '%-20s %-28s %-16s %s\n' "source" "name" "category" "description"
+    printf '%-20s %-28s %-16s %s\n' "--------------------" "----------------------------" "----------------" "-----------"
+  fi
 
   found=0
   while IFS='	' read -r source_name source_type source_location source_ref source_catalog extra; do
@@ -42,13 +58,21 @@ list_catalogs() {
           continue
           ;;
       esac
+      if ! is_valid_skill_name "$skill_name"; then
+        printf 'Invalid catalog skill name from %s: %s\n' "$source_name" "$skill_name" >&2
+        exit 1
+      fi
 
       row="${source_name} ${skill_name} ${category} ${triggers} ${description}"
       if [ -n "$query" ] && ! printf '%s\n' "$row" | grep -i -e "$query" >/dev/null 2>&1; then
         continue
       fi
 
-      printf '%-20s %-28s %-16s %s\n' "$source_name" "$skill_name" "$category" "$description"
+      if [ "$format" = "tsv" ]; then
+        printf '%s\t%s\t%s\t%s\t%s\n' "$source_name" "$skill_name" "$category" "$triggers" "$description"
+      else
+        printf '%-20s %-28s %-16s %s\n' "$source_name" "$skill_name" "$category" "$description"
+      fi
       found=$((found + 1))
     done < "$catalog_file"
   done < "$(skillhub_sources_file)"
@@ -65,6 +89,11 @@ list_catalogs() {
 
 install_skill() {
   wanted="$1"
+  if ! is_valid_skill_name "$wanted"; then
+    printf 'Invalid skill name: %s\n' "$wanted" >&2
+    exit 1
+  fi
+
   target_root=$(skillhub_target_root)
   match_count=0
   match_source=""
@@ -133,7 +162,15 @@ install_all() {
 cmd="${1:-list}"
 case "$cmd" in
   list)
-    list_catalogs
+    format="table"
+    if [ "${2:-}" = "--tsv" ]; then
+      format="tsv"
+      if [ "$#" -gt 2 ]; then
+        usage >&2
+        exit 1
+      fi
+    fi
+    list_catalogs "" "$format"
     ;;
   search)
     if [ "$#" -lt 2 ]; then
@@ -141,7 +178,16 @@ case "$cmd" in
       exit 1
     fi
     shift
-    list_catalogs "$*"
+    format="table"
+    if [ "${1:-}" = "--tsv" ]; then
+      format="tsv"
+      shift
+    fi
+    if [ "$#" -lt 1 ]; then
+      usage >&2
+      exit 1
+    fi
+    list_catalogs "$*" "$format"
     ;;
   install)
     if [ "$#" -lt 2 ]; then

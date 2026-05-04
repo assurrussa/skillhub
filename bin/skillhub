@@ -1,0 +1,56 @@
+#!/bin/sh
+set -eu
+
+if [ -n "${SKILLHUB_REPO:-}" ]; then
+  repo_root="$SKILLHUB_REPO"
+else
+  repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+fi
+
+if command -v go >/dev/null 2>&1 && [ -f "$repo_root/go.mod" ]; then
+  cd "$repo_root"
+  exec go run ./cmd/skillhub "$@"
+fi
+
+usage() {
+  printf '%s\n' \
+    'Usage:' \
+    '  skillhub sources list' \
+    '  skillhub sources sync [source-name]' \
+    '  skillhub skills list' \
+    '  skillhub skills search <query>' \
+    '  skillhub skills install <skill-name>...' \
+    '  skillhub skills install --all' \
+    '' \
+    'Short aliases:' \
+    '  skillhub list' \
+    '  skillhub search <query>' \
+    '  skillhub install <skill-name>...' \
+    '  skillhub install --all'
+}
+
+cmd="${1:-help}"
+case "$cmd" in
+  sources)
+    shift
+    exec sh "$repo_root/scripts/sources.sh" "$@"
+    ;;
+  skills)
+    shift
+    exec sh "$repo_root/scripts/skills.sh" "$@"
+    ;;
+  list|search|install)
+    exec sh "$repo_root/scripts/skills.sh" "$@"
+    ;;
+  tui)
+    printf 'skillhub tui requires Go. Install Go or run sh install.sh from the skillhub checkout.\n' >&2
+    exit 1
+    ;;
+  -h|--help|help)
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 1
+    ;;
+esac

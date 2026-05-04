@@ -1,7 +1,39 @@
 # Skillhub
 
-Shell-first hub for discovering and installing Codex skills from registered
-sources. TUI support can be added later on top of the same source registry.
+CLI and TUI hub for discovering and installing Codex skills from registered
+sources. The Go/Cobra command owns the user-facing interface; the POSIX shell
+scripts remain the portable backend used by the CLI and TUI.
+
+## Install
+
+Install the `skillhub` command. Go is required because the installed command is
+a compiled Cobra/Bubble Tea binary:
+
+```sh
+sh install.sh
+```
+
+By default it writes `~/.local/bin/skillhub`. Override the command location:
+
+```sh
+sh install.sh --bin-dir /tmp/bin
+SKILLHUB_BIN_DIR=/tmp/bin sh install.sh
+```
+
+If the install directory is not in `PATH`, the installer prints a note.
+
+You can also run it directly from a checkout:
+
+```sh
+sh bin/skillhub skills list
+```
+
+Open the interactive selector:
+
+```sh
+skillhub
+skillhub tui
+```
 
 ## Sources
 
@@ -14,19 +46,42 @@ Current source:
 For local development, point the source at a checkout instead of cloning:
 
 ```sh
-SKILLHUB_AGENT_RULES_PATH=/Users/amir/dev/projects/my/agent-rules \
-  sh scripts/skills.sh list
+SKILLHUB_AGENT_RULES_PATH=../agent-rules skillhub skills list
 ```
 
 ## Commands
 
 ```sh
-sh scripts/sources.sh list
-sh scripts/sources.sh sync agent-rules
-sh scripts/skills.sh list
-sh scripts/skills.sh search go
-sh scripts/skills.sh install rules-selector
-sh scripts/skills.sh install --all
+skillhub sources list
+skillhub sources sync agent-rules
+skillhub skills list
+skillhub skills search go
+skillhub skills install rules-selector
+skillhub skills install --all
+skillhub tui
+```
+
+Short aliases are also supported:
+
+```sh
+skillhub list
+skillhub search go
+skillhub install rules-selector
+skillhub install --all
+```
+
+In the TUI:
+
+```text
+j/k       move
+space     select/unselect
+/         search
+a         select all visible skills
+c         clear selection
+i         install selected skills
+s         sync sources
+r         reload catalog
+q         quit
 ```
 
 Installed skills go to:
@@ -38,13 +93,12 @@ Installed skills go to:
 Override the install target:
 
 ```sh
-AGENT_SKILLS_DIR=/tmp/skills sh scripts/skills.sh install rules-selector
+AGENT_SKILLS_DIR=/tmp/skills skillhub skills install rules-selector
 ```
 
 ## Validation
 
 ```sh
 sh scripts/check.sh
-SKILLHUB_AGENT_RULES_PATH=/Users/amir/dev/projects/my/agent-rules \
-  sh scripts/skills.sh list
+SKILLHUB_AGENT_RULES_PATH=../agent-rules sh bin/skillhub skills list
 ```

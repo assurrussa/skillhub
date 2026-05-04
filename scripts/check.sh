@@ -6,13 +6,21 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
 skillhub_validate_sources_file
 
-for script in scripts/lib.sh scripts/sources.sh scripts/skills.sh scripts/check.sh; do
+for script in install.sh bin/skillhub scripts/lib.sh scripts/sources.sh scripts/skills.sh scripts/check.sh; do
   if [ ! -f "$repo_root/$script" ]; then
     printf 'Missing script: %s\n' "$script" >&2
     exit 1
   fi
   sh -n "$repo_root/$script"
 done
+
+if [ -f "$repo_root/go.mod" ]; then
+  if ! command -v go >/dev/null 2>&1; then
+    printf 'Go is required to validate this repository.\n' >&2
+    exit 1
+  fi
+  (cd "$repo_root" && go test ./...)
+fi
 
 if ! awk -F '	' '
   NR == 1 { next }

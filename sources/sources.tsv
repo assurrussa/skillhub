@@ -1,0 +1,2 @@
+name	type	location	ref	catalog
+agent-rules	git	git@github.com:assurrussa/agent-rules.git	main	catalog/skills.tsv

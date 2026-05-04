@@ -16,7 +16,7 @@ var repoFlag string
 func NewRootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "skillhub",
-		Short:         "Discover and install Codex skills from registered sources",
+		Short:         "Discover and install agent skills from registered sources",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -36,6 +36,16 @@ func NewRootCommand() *cobra.Command {
 	}
 	sources.AddCommand(scriptCommand("list", "List configured skill sources", "scripts/sources.sh", []string{"list"}, cobra.NoArgs))
 	sources.AddCommand(scriptCommand("sync [source-name]", "Sync all sources or one source", "scripts/sources.sh", []string{"sync"}, cobra.MaximumNArgs(1)))
+	sources.AddCommand(sourceAddCommand())
+	sources.AddCommand(sourceRemoveCommand())
+	sources.AddCommand(sourceDefaultsCommand())
+
+	targets := &cobra.Command{
+		Use:   "targets",
+		Short: "List supported and planned install targets",
+	}
+	targets.AddCommand(targetListCommand())
+	targets.AddCommand(targetDetectCommand())
 
 	skills := &cobra.Command{
 		Use:   "skills",
@@ -43,12 +53,14 @@ func NewRootCommand() *cobra.Command {
 	}
 	skills.AddCommand(scriptCommand("list", "List available skills", "scripts/skills.sh", []string{"list"}, cobra.NoArgs))
 	skills.AddCommand(scriptCommand("search <query>", "Search available skills", "scripts/skills.sh", []string{"search"}, cobra.MinimumNArgs(1)))
-	skills.AddCommand(installCommand("install <skill-name>...", "Install selected skills"))
+	skills.AddCommand(installCommand("install [<source>/]<skill-name>...", "Install selected skills"))
 
-	root.AddCommand(sources, skills)
+	root.AddCommand(sources, targets, skills)
 	root.AddCommand(scriptCommand("list", "List available skills", "scripts/skills.sh", []string{"list"}, cobra.NoArgs))
 	root.AddCommand(scriptCommand("search <query>", "Search available skills", "scripts/skills.sh", []string{"search"}, cobra.MinimumNArgs(1)))
-	root.AddCommand(installCommand("install <skill-name>...", "Install selected skills"))
+	root.AddCommand(installCommand("install [<source>/]<skill-name>...", "Install selected skills"))
+	root.AddCommand(versionCommand())
+	root.AddCommand(updateCommand())
 	root.AddCommand(&cobra.Command{
 		Use:   "tui",
 		Short: "Open the interactive skill selector",
@@ -62,6 +74,105 @@ func NewRootCommand() *cobra.Command {
 	})
 
 	return root
+}
+
+func sourceAddCommand() *cobra.Command {
+	var name string
+	var sourceType string
+	var ref string
+	var catalog string
+	cmd := &cobra.Command{
+		Use:   "add <path-or-git-url>",
+		Short: "Add a user skill source",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repoRoot, err := resolveRepoRoot()
+			if err != nil {
+				return err
+			}
+			scriptArgs := []string{"add", args[0]}
+			if name != "" {
+				scriptArgs = append(scriptArgs, "--name", name)
+			}
+			if sourceType != "" {
+				scriptArgs = append(scriptArgs, "--type", sourceType)
+			}
+			if ref != "" {
+				scriptArgs = append(scriptArgs, "--ref", ref)
+			}
+			if catalog != "" {
+				scriptArgs = append(scriptArgs, "--catalog", catalog)
+			}
+			return runScript(repoRoot, "scripts/sources.sh", scriptArgs...)
+		},
+	}
+	cmd.Flags().StringVar(&name, "name", "", "source name; defaults to basename of path or git URL")
+	cmd.Flags().StringVar(&sourceType, "type", "", "source type: path or git")
+	cmd.Flags().StringVar(&ref, "ref", "", "git branch/tag/ref; defaults to main for git and - for path")
+	cmd.Flags().StringVar(&catalog, "catalog", "", "catalog path inside the source; defaults to catalog/skills.tsv")
+	return cmd
+}
+
+func sourceRemoveCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "remove <name>",
+		Short: "Remove a user skill source",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repoRoot, err := resolveRepoRoot()
+			if err != nil {
+				return err
+			}
+			return runScript(repoRoot, "scripts/sources.sh", "remove", args[0])
+		},
+	}
+}
+
+func sourceDefaultsCommand() *cobra.Command {
+	defaults := &cobra.Command{
+		Use:   "defaults",
+		Short: "List and add recommended source presets",
+	}
+	defaults.AddCommand(scriptCommand("list", "List recommended source presets", "scripts/sources.sh", []string{"defaults", "list"}, cobra.NoArgs))
+	defaults.AddCommand(scriptCommand("add <source-name>", "Add a recommended source preset", "scripts/sources.sh", []string{"defaults", "add"}, cobra.ExactArgs(1)))
+	return defaults
+}
+
+func targetListCommand() *cobra.Command {
+	var tsv bool
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List install targets",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repoRoot, err := resolveRepoRoot()
+			if err != nil {
+				return err
+			}
+			scriptArgs := []string{"list"}
+			if tsv {
+				scriptArgs = append(scriptArgs, "--tsv")
+			}
+			return runScript(repoRoot, "scripts/targets.sh", scriptArgs...)
+		},
+	}
+	cmd.Flags().BoolVar(&tsv, "tsv", false, "print tab-separated output")
+	return cmd
+}
+
+func targetDetectCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "detect",
+		Short: "Show resolved paths for supported install targets",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repoRoot, err := resolveRepoRoot()
+			if err != nil {
+				return err
+			}
+			return runScript(repoRoot, "scripts/targets.sh", "detect")
+		},
+	}
 }
 
 func scriptCommand(use, short, script string, prefix []string, args cobra.PositionalArgs) *cobra.Command {
@@ -81,6 +192,10 @@ func scriptCommand(use, short, script string, prefix []string, args cobra.Positi
 
 func installCommand(use, short string) *cobra.Command {
 	var all bool
+	var target string
+	var scope string
+	var project string
+	var dir string
 	cmd := &cobra.Command{
 		Use:   use,
 		Short: short,
@@ -101,13 +216,30 @@ func installCommand(use, short string) *cobra.Command {
 			scriptArgs := []string{"install"}
 			if all {
 				scriptArgs = append(scriptArgs, "--all")
-			} else {
+			}
+			if cmd.Flags().Changed("target") {
+				scriptArgs = append(scriptArgs, "--target", target)
+			}
+			if cmd.Flags().Changed("scope") {
+				scriptArgs = append(scriptArgs, "--scope", scope)
+			}
+			if cmd.Flags().Changed("project") {
+				scriptArgs = append(scriptArgs, "--project", project)
+			}
+			if cmd.Flags().Changed("dir") {
+				scriptArgs = append(scriptArgs, "--dir", dir)
+			}
+			if !all {
 				scriptArgs = append(scriptArgs, args...)
 			}
 			return runScript(repoRoot, "scripts/skills.sh", scriptArgs...)
 		},
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "install all cataloged skills")
+	cmd.Flags().StringVar(&target, "target", "", "install target id; defaults to codex")
+	cmd.Flags().StringVar(&scope, "scope", "", "install scope for codex: global or project")
+	cmd.Flags().StringVar(&project, "project", "", "project directory for project-scope installs")
+	cmd.Flags().StringVar(&dir, "dir", "", "explicit directory for --target directory")
 	return cmd
 }
 
@@ -116,6 +248,13 @@ func runScript(repoRoot, script string, args ...string) error {
 	cmd := exec.Command("sh", append([]string{scriptPath}, args...)...)
 	cmd.Dir = repoRoot
 	cmd.Env = os.Environ()
+	if os.Getenv("SKILLHUB_CALLER_CWD") == "" {
+		callerCwd, err := os.Getwd()
+		if err != nil {
+			callerCwd = "."
+		}
+		cmd.Env = append(cmd.Env, "SKILLHUB_CALLER_CWD="+callerCwd)
+	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
@@ -142,8 +281,8 @@ func cleanRepoRoot(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, err := os.Stat(filepath.Join(abs, "sources", "sources.tsv")); err != nil {
-		return "", fmt.Errorf("invalid skillhub repository %s: %w", abs, err)
+	if !hasRepoFiles(abs) {
+		return "", fmt.Errorf("invalid skillhub repository %s: missing required skillhub files", abs)
 	}
 	return abs, nil
 }
@@ -164,9 +303,11 @@ func findRepoRoot(start string) (string, bool) {
 
 func hasRepoFiles(dir string) bool {
 	required := []string{
-		filepath.Join("sources", "sources.tsv"),
+		filepath.Join("defaults", "sources.tsv"),
+		filepath.Join("targets", "targets.tsv"),
 		filepath.Join("scripts", "skills.sh"),
 		filepath.Join("scripts", "sources.sh"),
+		filepath.Join("scripts", "targets.sh"),
 	}
 	for _, rel := range required {
 		if _, err := os.Stat(filepath.Join(dir, rel)); err != nil {

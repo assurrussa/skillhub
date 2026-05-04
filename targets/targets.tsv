@@ -1,0 +1,15 @@
+id	label	status	adapter	description
+codex	Codex	supported	skill-dir	Install SKILL.md packages into a Codex-compatible skills directory.
+directory	Directory	supported	skill-dir	Install SKILL.md packages into an explicit directory.
+claude	Claude	planned	planned	Adapter planned; exact target format is not written by v1.
+cursor	Cursor	planned	planned	Adapter planned; exact target format is not written by v1.
+copilot	Copilot	planned	planned	Adapter planned; exact target format is not written by v1.
+windsurf	Windsurf	planned	planned	Adapter planned; exact target format is not written by v1.
+roo-code	Roo Code	planned	planned	Adapter planned; exact target format is not written by v1.
+augment	Augment	planned	planned	Adapter planned; exact target format is not written by v1.
+gemini	Gemini	planned	planned	Adapter planned; exact target format is not written by v1.
+opencode	OpenCode	planned	planned	Adapter planned; exact target format is not written by v1.
+kiro	Kiro	planned	planned	Adapter planned; exact target format is not written by v1.
+kilocode	KiloCode	planned	planned	Adapter planned; exact target format is not written by v1.
+zencoder	Zencoder	planned	planned	Adapter planned; exact target format is not written by v1.
+vscode	VS Code	planned	planned	Adapter planned; exact target format is not written by v1.

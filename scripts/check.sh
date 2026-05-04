@@ -4,9 +4,10 @@ set -eu
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$repo_root/scripts/lib.sh"
 
-skillhub_validate_sources_file
+skillhub_validate_defaults_sources_file
+skillhub_validate_targets_file
 
-for script in install.sh bin/skillhub scripts/lib.sh scripts/sources.sh scripts/skills.sh scripts/check.sh; do
+for script in install.sh bin/skillhub scripts/lib.sh scripts/sources.sh scripts/skills.sh scripts/targets.sh scripts/check.sh; do
   if [ ! -f "$repo_root/$script" ]; then
     printf 'Missing script: %s\n' "$script" >&2
     exit 1
@@ -26,11 +27,11 @@ if ! awk -F '	' '
   NR == 1 { next }
   $1 == "" || $1 ~ /^#/ { next }
   seen[$1]++ { printf "Duplicate source: %s\n", $1 > "/dev/stderr"; exit 1 }
-' "$(skillhub_sources_file)"; then
+' "$(skillhub_defaults_sources_file)"; then
   exit 1
 fi
 
-checked=0
+default_checked=0
 while IFS='	' read -r name type location ref catalog extra; do
   case "$name" in
     ''|'#'*|'name')
@@ -64,12 +65,55 @@ while IFS='	' read -r name type location ref catalog extra; do
     exit 1
   fi
 
-  checked=$((checked + 1))
-done < "$(skillhub_sources_file)"
+  default_checked=$((default_checked + 1))
+done < "$(skillhub_defaults_sources_file)"
 
-if [ "$checked" -eq 0 ]; then
-  printf 'No sources configured.\n' >&2
+if [ "$default_checked" -eq 0 ]; then
+  printf 'No default source presets configured.\n' >&2
   exit 1
 fi
 
-printf 'Validated %d skill source(s).\n' "$checked"
+target_checked=0
+while IFS='	' read -r id label status adapter description extra; do
+  case "$id" in
+    ''|'#'*|'id')
+      continue
+      ;;
+  esac
+
+  case "$id" in
+    *[!a-z0-9_-]*)
+      printf 'Invalid target id: %s\n' "$id" >&2
+      exit 1
+      ;;
+  esac
+
+  case "$status" in
+    supported|planned)
+      ;;
+    *)
+      printf 'Unsupported target status for %s: %s\n' "$id" "$status" >&2
+      exit 1
+      ;;
+  esac
+
+  if [ -z "$label" ] || [ -z "$adapter" ] || [ -z "$description" ]; then
+    printf 'Target row has empty fields for %s\n' "$id" >&2
+    exit 1
+  fi
+
+  if [ -n "${extra:-}" ]; then
+    printf 'Target row has too many columns for %s\n' "$id" >&2
+    exit 1
+  fi
+
+  target_checked=$((target_checked + 1))
+done < "$(skillhub_targets_file)"
+
+if [ "$target_checked" -eq 0 ]; then
+  printf 'No targets configured.\n' >&2
+  exit 1
+fi
+
+printf 'Validated %d default source preset(s).\n' "$default_checked"
+printf 'Validated %d install target(s).\n' "$target_checked"

@@ -135,6 +135,8 @@ list_catalogs() {
 install_skill() {
   wanted="$1"
   target_root="$2"
+  target="$3"
+  scope="$4"
   wanted_source=""
   wanted_skill=$(skill_install_name "$wanted")
   case "$wanted" in
@@ -146,6 +148,9 @@ install_skill() {
   match_count=0
   match_source=""
   match_path=""
+  match_ref=""
+  match_location=""
+  match_catalog=""
   source_count=0
   considered_source_count=0
 
@@ -169,6 +174,9 @@ install_skill() {
       match_count=$((match_count + 1))
       match_source="$source_name"
       match_path="$source_path"
+      match_ref="$source_ref"
+      match_location="$source_location"
+      match_catalog="$source_catalog"
     fi
   done < "$sources_file"
 
@@ -201,11 +209,29 @@ install_skill() {
   mkdir -p "$target_root"
   rm -rf "$target_root/$wanted_skill"
   cp -R "$skill_dir" "$target_root/$wanted_skill"
+  installed_path="$target_root/$wanted_skill"
+  content_hash=$(skillhub_hash_skill_dir "$installed_path")
+  skillhub_write_install_metadata \
+    "$installed_path" \
+    "$match_source" \
+    "$wanted_skill" \
+    "$match_source/$wanted_skill" \
+    "$target" \
+    "$scope" \
+    "$target_root" \
+    "$match_ref" \
+    "$match_location" \
+    "$match_catalog" \
+    "$content_hash"
   printf 'Installed %s from %s to %s\n' "$wanted_skill" "$match_source" "$target_root/$wanted_skill"
 }
 
 install_all() {
   target_root="$1"
+  target="$2"
+  scope="$3"
+
+  seen_install_names=""
   source_count=0
   while IFS='	' read -r source_name source_type source_location source_ref source_catalog extra; do
     case "$source_name" in
@@ -223,7 +249,15 @@ install_all() {
           continue
           ;;
       esac
-      install_skill "$skill_name" "$target_root"
+      install_name=$(skill_install_name "$source_name/$skill_name")
+      case " $seen_install_names " in
+        *" $install_name "*)
+          printf 'Multiple cataloged skills install to the same target name: %s\n' "$install_name" >&2
+          printf 'Install one explicitly as <source>/%s instead of using --all.\n' "$install_name" >&2
+          exit 1
+          ;;
+      esac
+      seen_install_names="${seen_install_names}${seen_install_names:+ }$install_name"
     done < "$catalog_file"
   done < "$sources_file"
 
@@ -231,6 +265,25 @@ install_all() {
     no_sources_message
     exit 1
   fi
+
+  while IFS='	' read -r source_name source_type source_location source_ref source_catalog extra; do
+    case "$source_name" in
+      ''|'#'*|'name')
+        continue
+        ;;
+    esac
+
+    source_path=$(skillhub_sync_source "$source_name" "$source_type" "$source_location" "$source_ref")
+    catalog_file="$source_path/$source_catalog"
+    while IFS='	' read -r skill_name category triggers description catalog_extra; do
+      case "$skill_name" in
+        ''|'#'*|'name')
+          continue
+          ;;
+      esac
+      install_skill "$source_name/$skill_name" "$target_root" "$target" "$scope"
+    done < "$catalog_file"
+  done < "$sources_file"
 }
 
 install_requested() {
@@ -310,8 +363,12 @@ install_requested() {
   fi
 
   target_root=$(skillhub_target_root "$target" "$scope" "$project" "$dir" "$legacy_allowed" "$scope_was_set")
+  metadata_scope="$scope"
+  if [ "$target" = "directory" ]; then
+    metadata_scope="custom"
+  fi
   if [ "$all" -eq 1 ]; then
-    install_all "$target_root"
+    install_all "$target_root" "$target" "$metadata_scope"
     return
   fi
 
@@ -328,7 +385,7 @@ install_requested() {
   done
 
   for skill_name in $skill_names; do
-    install_skill "$skill_name" "$target_root"
+    install_skill "$skill_name" "$target_root" "$target" "$metadata_scope"
   done
 }
 

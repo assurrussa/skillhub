@@ -184,6 +184,8 @@ case "$cmd" in
       exit 1
     fi
     location="$2"
+    raw_location="$location"
+    path_location=$(skillhub_abs_path "$location" "$(skillhub_caller_cwd)")
     shift 2
     name=""
     type=""
@@ -232,7 +234,7 @@ case "$cmd" in
     done
 
     if [ -z "$type" ]; then
-      if [ -d "$location" ]; then
+      if [ -d "$path_location" ]; then
         type="path"
       else
         type="git"
@@ -241,7 +243,11 @@ case "$cmd" in
     validate_source_type_or_exit "$type"
 
     if [ -z "$name" ]; then
-      name=$(derive_source_name "$location")
+      if [ "$type" = "path" ]; then
+        name=$(derive_source_name "$path_location")
+      else
+        name=$(derive_source_name "$raw_location")
+      fi
     fi
     validate_source_name_or_exit "$name"
 
@@ -252,7 +258,7 @@ case "$cmd" in
 
     case "$type" in
       path)
-        location=$(validate_path_source_or_exit "$name" "$location" "$catalog")
+        location=$(validate_path_source_or_exit "$name" "$path_location" "$catalog")
         if [ -z "$ref" ]; then
           ref="-"
         fi

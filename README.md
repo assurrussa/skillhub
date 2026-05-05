@@ -88,10 +88,16 @@ skillhub sources add ../agent-rules --name local-agent-rules
 skillhub sources remove local-agent-rules
 skillhub targets list
 skillhub targets detect
+skillhub targets detect --tsv --project /path/to/project
+skillhub installed list
+skillhub installed list --target claude --scope project --project /path/to/project
 skillhub skills list
 skillhub skills search go
 skillhub skills install rules-selector
 skillhub skills install rules-selector --target codex --scope project
+skillhub skills install rules-selector --target claude --scope global
+skillhub skills install rules-selector --target gemini --scope project
+skillhub skills install rules-selector --target opencode --scope global
 skillhub skills install rules-selector --target directory --dir /tmp/skills
 skillhub skills install --all
 skillhub tui
@@ -113,22 +119,28 @@ In the TUI:
 ```text
 j/k       move
 space     select/unselect
+enter     open highlighted skill details
 /         search
 a         select all visible skills
 c         clear selection
 d         open recommended source presets
 n         add custom source path or git URL
-t         toggle Codex global/project target
-i         install selected skills
+t         choose install targets
+i         choose targets for selected skills
 s         sync sources
 r         reload catalog
 q         quit
 ```
 
-The skills list shows `source`, `skill`, `category`, and description columns.
-When a preset source screen is open, use `enter` to add the highlighted source
-or `esc` to return to skills. Use `n` to add a custom path or git URL from the
-TUI; custom source flags such as `--name` and `--ref` remain CLI-only.
+The TUI opens as a task-oriented selector: a concise summary header, a readable
+category tree, and an action bar. Skill rows show name, description, source, and
+triggers without a wide table; selected skills use a green `[✓]` marker. Press
+`enter` to open details for the highlighted skill. Press `i` after selecting
+skills to choose one or more supported assistants, then press `enter` to install
+to all selected targets. When a preset source screen is open, use `enter` to add
+the highlighted source or `esc` to return to skills. Use `n` to add a custom
+path or git URL from the TUI; custom source flags such as `--name` and `--ref`
+remain CLI-only.
 
 Update `skillhub` itself without reinstalling skills:
 
@@ -138,7 +150,7 @@ skillhub version
 ```
 
 `skillhub update` refreshes the source checkout and rebuilds the installed
-binary. Installed skills under `~/.agents/skills` are not modified.
+binary. Installed skills are not modified.
 
 Sources are stored outside the installed checkout:
 
@@ -169,16 +181,42 @@ Targets are listed in `targets/targets.tsv`:
 ```sh
 skillhub targets list
 skillhub targets detect
+skillhub targets detect --tsv --project /path/to/project
 ```
 
 Supported v1 targets:
 
 - `codex --scope global`: installs to `~/.agents/skills`.
 - `codex --scope project`: installs to `<project>/.agents/skills`.
+- `claude --scope global`: installs to `~/.claude/skills`.
+- `claude --scope project`: installs to `<project>/.claude/skills`.
+- `gemini --scope global`: installs to `~/.gemini/skills`.
+- `gemini --scope project`: installs to `<project>/.gemini/skills`.
+- `opencode --scope global`: installs to `~/.config/opencode/skills`, or
+  `$OPENCODE_CONFIG_DIR/skills` when `OPENCODE_CONFIG_DIR` is set.
+- `opencode --scope project`: installs to `<project>/.opencode/skills`.
 - `directory --dir <path>`: installs directly to an explicit skills directory.
 
 Other assistants are listed as planned targets so the CLI and future TUI can
 show the roadmap without writing into unverified formats.
+
+Successful installs write metadata to the installed skill directory:
+
+```text
+<target-root>/<skill-name>/.skillhub.json
+```
+
+Inspect installed skills without modifying them:
+
+```sh
+skillhub installed list
+skillhub installed list --target claude --scope project --project /path/to/project
+skillhub installed list --target directory --dir /tmp/skills --tsv
+```
+
+`targets detect` reports whether each supported target path exists, how many
+`SKILL.md` directories it contains, and how many of those are managed by
+Skillhub metadata.
 
 Project-scope installs use the caller working directory unless `--project` is
 provided:
@@ -186,6 +224,9 @@ provided:
 ```sh
 skillhub skills install rules-selector --target codex --scope project
 skillhub skills install rules-selector --target codex --scope project --project /path/to/project
+skillhub skills install rules-selector --target claude --scope global
+skillhub skills install rules-selector --target gemini --scope project
+skillhub skills install rules-selector --target opencode --scope global
 skillhub skills install rules-selector --target directory --dir /tmp/skills
 ```
 
@@ -197,6 +238,14 @@ skillhub skills install agent-rules/go-project-rules
 ```
 
 ## Validation
+
+```sh
+make verify
+make smoke-temp
+make tui-temp
+```
+
+Raw commands:
 
 ```sh
 sh scripts/check.sh

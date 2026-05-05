@@ -7,7 +7,7 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 skillhub_validate_defaults_sources_file
 skillhub_validate_targets_file
 
-for script in install.sh bin/skillhub scripts/lib.sh scripts/sources.sh scripts/skills.sh scripts/targets.sh scripts/check.sh; do
+for script in install.sh bin/skillhub scripts/lib.sh scripts/sources.sh scripts/skills.sh scripts/installed.sh scripts/targets.sh scripts/check.sh; do
   if [ ! -f "$repo_root/$script" ]; then
     printf 'Missing script: %s\n' "$script" >&2
     exit 1
@@ -74,6 +74,7 @@ if [ "$default_checked" -eq 0 ]; then
 fi
 
 target_checked=0
+seen_planned_target=0
 while IFS='	' read -r id label status adapter description extra; do
   case "$id" in
     ''|'#'*|'id')
@@ -96,6 +97,14 @@ while IFS='	' read -r id label status adapter description extra; do
       exit 1
       ;;
   esac
+
+  if [ "$status" = "planned" ]; then
+    seen_planned_target=1
+  fi
+  if [ "$status" = "supported" ] && [ "$seen_planned_target" -eq 1 ]; then
+    printf 'Supported target must be listed before planned targets: %s\n' "$id" >&2
+    exit 1
+  fi
 
   if [ -z "$label" ] || [ -z "$adapter" ] || [ -z "$description" ]; then
     printf 'Target row has empty fields for %s\n' "$id" >&2

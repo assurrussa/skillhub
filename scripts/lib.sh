@@ -102,6 +102,38 @@ skillhub_default_codex_skills_dir() {
   printf '%s/.agents/skills\n' "$HOME"
 }
 
+skillhub_default_claude_skills_dir() {
+  if [ -z "${HOME:-}" ]; then
+    printf 'HOME is not set; use --target directory --dir <path>.\n' >&2
+    exit 1
+  fi
+
+  printf '%s/.claude/skills\n' "$HOME"
+}
+
+skillhub_default_gemini_skills_dir() {
+  if [ -z "${HOME:-}" ]; then
+    printf 'HOME is not set; use --target directory --dir <path>.\n' >&2
+    exit 1
+  fi
+
+  printf '%s/.gemini/skills\n' "$HOME"
+}
+
+skillhub_default_opencode_skills_dir() {
+  if [ -n "${OPENCODE_CONFIG_DIR:-}" ]; then
+    printf '%s/skills\n' "$OPENCODE_CONFIG_DIR"
+    return
+  fi
+
+  if [ -z "${HOME:-}" ]; then
+    printf 'HOME is not set; set OPENCODE_CONFIG_DIR or use --target directory --dir <path>.\n' >&2
+    exit 1
+  fi
+
+  printf '%s/.config/opencode/skills\n' "$HOME"
+}
+
 skillhub_project_dir() {
   project="$1"
   if [ -n "$project" ]; then
@@ -146,6 +178,13 @@ skillhub_validate_targets_file() {
       }
       if ($3 != "supported" && $3 != "planned") {
         printf "Unsupported target status for %s: %s\n", $1, $3 > "/dev/stderr"
+        exit 1
+      }
+      if ($3 == "planned") {
+        seen_planned = 1
+      }
+      if ($3 == "supported" && seen_planned) {
+        printf "Supported target must be listed before planned targets: %s\n", $1 > "/dev/stderr"
         exit 1
       }
       if ($4 == "") {
@@ -234,6 +273,10 @@ skillhub_target_root() {
     printf 'Target %s uses unsupported adapter: %s\n' "$target" "$target_adapter" >&2
     exit 1
   fi
+  if [ -n "$dir" ] && [ "$target" != "directory" ]; then
+    printf '%s\n' '--dir can only be used with --target directory.' >&2
+    exit 1
+  fi
 
   case "$target" in
     codex)
@@ -243,6 +286,36 @@ skillhub_target_root() {
           ;;
         project)
           printf '%s/.agents/skills\n' "$(skillhub_project_dir "$project")"
+          ;;
+      esac
+      ;;
+    claude)
+      case "$scope" in
+        global)
+          skillhub_default_claude_skills_dir
+          ;;
+        project)
+          printf '%s/.claude/skills\n' "$(skillhub_project_dir "$project")"
+          ;;
+      esac
+      ;;
+    gemini)
+      case "$scope" in
+        global)
+          skillhub_default_gemini_skills_dir
+          ;;
+        project)
+          printf '%s/.gemini/skills\n' "$(skillhub_project_dir "$project")"
+          ;;
+      esac
+      ;;
+    opencode)
+      case "$scope" in
+        global)
+          skillhub_default_opencode_skills_dir
+          ;;
+        project)
+          printf '%s/.opencode/skills\n' "$(skillhub_project_dir "$project")"
           ;;
       esac
       ;;
@@ -262,6 +335,176 @@ skillhub_target_root() {
       exit 1
       ;;
   esac
+}
+
+skillhub_json_escape() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+skillhub_now_utc() {
+  date -u '+%Y-%m-%dT%H:%M:%SZ'
+}
+
+skillhub_sha256_stream() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | awk '{ print $1 }'
+    return
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{ print $1 }'
+    return
+  fi
+  if command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 | awk '{ print $NF }'
+    return
+  fi
+  cat >/dev/null
+  printf '%s\n' '-'
+}
+
+skillhub_hash_skill_dir() {
+  skill_dir="$1"
+  if [ ! -d "$skill_dir" ]; then
+    printf '%s\n' '-'
+    return
+  fi
+
+  (
+    CDPATH= cd -- "$skill_dir"
+    find . -type f ! -name '.skillhub.json' -print | LC_ALL=C sort | while IFS= read -r file; do
+      printf '%s\n' "$file"
+      cat -- "$file"
+      printf '\n'
+    done
+  ) | skillhub_sha256_stream
+}
+
+skillhub_write_install_metadata() {
+  installed_path="$1"
+  source_name="$2"
+  skill_name="$3"
+  qualified_skill="$4"
+  target="$5"
+  scope="$6"
+  target_root="$7"
+  source_ref="$8"
+  source_location="$9"
+  source_catalog="${10}"
+  content_hash="${11}"
+  installed_at=$(skillhub_now_utc)
+
+  metadata_file="$installed_path/.skillhub.json"
+  cat > "$metadata_file" <<EOF
+{
+  "schema_version": "1",
+  "source": "$(skillhub_json_escape "$source_name")",
+  "skill": "$(skillhub_json_escape "$skill_name")",
+  "qualified_skill": "$(skillhub_json_escape "$qualified_skill")",
+  "target": "$(skillhub_json_escape "$target")",
+  "scope": "$(skillhub_json_escape "$scope")",
+  "target_root": "$(skillhub_json_escape "$target_root")",
+  "installed_path": "$(skillhub_json_escape "$installed_path")",
+  "source_ref": "$(skillhub_json_escape "$source_ref")",
+  "source_location": "$(skillhub_json_escape "$source_location")",
+  "catalog": "$(skillhub_json_escape "$source_catalog")",
+  "content_hash": "$(skillhub_json_escape "$content_hash")",
+  "installed_at": "$(skillhub_json_escape "$installed_at")"
+}
+EOF
+}
+
+skillhub_count_skill_dirs() {
+  target_root="$1"
+  count=0
+  if [ ! -d "$target_root" ]; then
+    printf '0\n'
+    return
+  fi
+  for skill_dir in "$target_root"/*; do
+    [ -d "$skill_dir" ] || continue
+    [ -f "$skill_dir/SKILL.md" ] || continue
+    count=$((count + 1))
+  done
+  printf '%s\n' "$count"
+}
+
+skillhub_count_managed_skill_dirs() {
+  target_root="$1"
+  count=0
+  if [ ! -d "$target_root" ]; then
+    printf '0\n'
+    return
+  fi
+  for skill_dir in "$target_root"/*; do
+    [ -d "$skill_dir" ] || continue
+    [ -f "$skill_dir/.skillhub.json" ] || continue
+    count=$((count + 1))
+  done
+  printf '%s\n' "$count"
+}
+
+skillhub_dir_exists_label() {
+  if [ -d "$1" ]; then
+    printf 'yes\n'
+  else
+    printf 'no\n'
+  fi
+}
+
+skillhub_metadata_value() {
+  metadata_file="$1"
+  key="$2"
+  if [ ! -f "$metadata_file" ]; then
+    printf '%s\n' '-'
+    return
+  fi
+  value=$(sed -n 's/^[[:space:]]*"'"$key"'":[[:space:]]*"\(.*\)",\{0,1\}[[:space:]]*$/\1/p' "$metadata_file" | sed -n '1p')
+  if [ -n "$value" ]; then
+    printf '%s\n' "$value"
+  else
+    printf '%s\n' '-'
+  fi
+}
+
+skillhub_emit_installed_tsv() {
+  target_root="$1"
+  target="$2"
+  scope="$3"
+
+  printf 'target\tscope\tskill\tmanaged\tsource\tqualified_skill\tinstalled_path\tcontent_hash\tinstalled_at\tpath\n'
+  if [ ! -d "$target_root" ]; then
+    return
+  fi
+
+  for skill_dir in "$target_root"/*; do
+    [ -d "$skill_dir" ] || continue
+    [ -f "$skill_dir/SKILL.md" ] || continue
+    skill_name=$(basename -- "$skill_dir")
+    metadata_file="$skill_dir/.skillhub.json"
+    managed="no"
+    if [ -f "$metadata_file" ]; then
+      managed="yes"
+    fi
+    source=$(skillhub_metadata_value "$metadata_file" source)
+    qualified_skill=$(skillhub_metadata_value "$metadata_file" qualified_skill)
+    installed_path=$(skillhub_metadata_value "$metadata_file" installed_path)
+    content_hash=$(skillhub_metadata_value "$metadata_file" content_hash)
+    installed_at=$(skillhub_metadata_value "$metadata_file" installed_at)
+    if [ "$installed_path" = "-" ]; then
+      installed_path="$skill_dir"
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$target" "$scope" "$skill_name" "$managed" "$source" "$qualified_skill" "$installed_path" "$content_hash" "$installed_at" "$skill_dir"
+  done
+}
+
+skillhub_emit_installed_table() {
+  target_root="$1"
+  target="$2"
+  scope="$3"
+
+  printf '%-12s %-8s %-28s %-8s %-20s %s\n' "target" "scope" "skill" "managed" "source" "path"
+  printf '%-12s %-8s %-28s %-8s %-20s %s\n' "------------" "--------" "----------------------------" "--------" "--------------------" "----"
+  skillhub_emit_installed_tsv "$target_root" "$target" "$scope" | awk -F '	' 'NR > 1 { printf "%-12s %-8s %-28s %-8s %-20s %s\n", $1, $2, $3, $4, $5, $10 }'
 }
 
 skillhub_source_path() {

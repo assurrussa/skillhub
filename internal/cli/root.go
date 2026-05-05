@@ -47,6 +47,12 @@ func NewRootCommand() *cobra.Command {
 	targets.AddCommand(targetListCommand())
 	targets.AddCommand(targetDetectCommand())
 
+	installed := &cobra.Command{
+		Use:   "installed",
+		Short: "Inspect installed skills",
+	}
+	installed.AddCommand(installedListCommand())
+
 	skills := &cobra.Command{
 		Use:   "skills",
 		Short: "List, search, and install skills",
@@ -55,7 +61,7 @@ func NewRootCommand() *cobra.Command {
 	skills.AddCommand(scriptCommand("search <query>", "Search available skills", "scripts/skills.sh", []string{"search"}, cobra.MinimumNArgs(1)))
 	skills.AddCommand(installCommand("install [<source>/]<skill-name>...", "Install selected skills"))
 
-	root.AddCommand(sources, targets, skills)
+	root.AddCommand(sources, targets, installed, skills)
 	root.AddCommand(scriptCommand("list", "List available skills", "scripts/skills.sh", []string{"list"}, cobra.NoArgs))
 	root.AddCommand(scriptCommand("search <query>", "Search available skills", "scripts/skills.sh", []string{"search"}, cobra.MinimumNArgs(1)))
 	root.AddCommand(installCommand("install [<source>/]<skill-name>...", "Install selected skills"))
@@ -161,7 +167,9 @@ func targetListCommand() *cobra.Command {
 }
 
 func targetDetectCommand() *cobra.Command {
-	return &cobra.Command{
+	var tsv bool
+	var project string
+	cmd := &cobra.Command{
 		Use:   "detect",
 		Short: "Show resolved paths for supported install targets",
 		Args:  cobra.NoArgs,
@@ -170,9 +178,61 @@ func targetDetectCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runScript(repoRoot, "scripts/targets.sh", "detect")
+			scriptArgs := []string{"detect"}
+			if tsv {
+				scriptArgs = append(scriptArgs, "--tsv")
+			}
+			if cmd.Flags().Changed("project") {
+				scriptArgs = append(scriptArgs, "--project", project)
+			}
+			return runScript(repoRoot, "scripts/targets.sh", scriptArgs...)
 		},
 	}
+	cmd.Flags().BoolVar(&tsv, "tsv", false, "print tab-separated output")
+	cmd.Flags().StringVar(&project, "project", "", "project directory for project-scope detection")
+	return cmd
+}
+
+func installedListCommand() *cobra.Command {
+	var target string
+	var scope string
+	var project string
+	var dir string
+	var tsv bool
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List installed skills for a target",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repoRoot, err := resolveRepoRoot()
+			if err != nil {
+				return err
+			}
+			scriptArgs := []string{"list"}
+			if cmd.Flags().Changed("target") {
+				scriptArgs = append(scriptArgs, "--target", target)
+			}
+			if cmd.Flags().Changed("scope") {
+				scriptArgs = append(scriptArgs, "--scope", scope)
+			}
+			if cmd.Flags().Changed("project") {
+				scriptArgs = append(scriptArgs, "--project", project)
+			}
+			if cmd.Flags().Changed("dir") {
+				scriptArgs = append(scriptArgs, "--dir", dir)
+			}
+			if tsv {
+				scriptArgs = append(scriptArgs, "--tsv")
+			}
+			return runScript(repoRoot, "scripts/installed.sh", scriptArgs...)
+		},
+	}
+	cmd.Flags().StringVar(&target, "target", "", "install target id; defaults to codex")
+	cmd.Flags().StringVar(&scope, "scope", "", "install scope for scoped targets: global or project")
+	cmd.Flags().StringVar(&project, "project", "", "project directory for project-scope installs")
+	cmd.Flags().StringVar(&dir, "dir", "", "explicit directory for --target directory")
+	cmd.Flags().BoolVar(&tsv, "tsv", false, "print tab-separated output")
+	return cmd
 }
 
 func scriptCommand(use, short, script string, prefix []string, args cobra.PositionalArgs) *cobra.Command {
@@ -237,7 +297,7 @@ func installCommand(use, short string) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "install all cataloged skills")
 	cmd.Flags().StringVar(&target, "target", "", "install target id; defaults to codex")
-	cmd.Flags().StringVar(&scope, "scope", "", "install scope for codex: global or project")
+	cmd.Flags().StringVar(&scope, "scope", "", "install scope for scoped targets: global or project")
 	cmd.Flags().StringVar(&project, "project", "", "project directory for project-scope installs")
 	cmd.Flags().StringVar(&dir, "dir", "", "explicit directory for --target directory")
 	return cmd
@@ -307,6 +367,7 @@ func hasRepoFiles(dir string) bool {
 		filepath.Join("targets", "targets.tsv"),
 		filepath.Join("scripts", "skills.sh"),
 		filepath.Join("scripts", "sources.sh"),
+		filepath.Join("scripts", "installed.sh"),
 		filepath.Join("scripts", "targets.sh"),
 	}
 	for _, rel := range required {

@@ -87,6 +87,7 @@ SKILLHUB_AGENT_RULES_PATH=../agent-rules skillhub skills list
 
 ```sh
 skillhub sources list
+skillhub sources list --tsv
 skillhub sources sync agent-rules
 skillhub sources defaults list
 skillhub sources defaults add agent-rules
@@ -130,6 +131,7 @@ skillhub install --all
 In the TUI:
 
 ```text
+1/2/3/4/5 switch sections
 j/k       move
 space     select/unselect
 enter     open highlighted skill details
@@ -140,20 +142,29 @@ d         open recommended source presets
 n         add custom source path or git URL
 t         choose install targets
 i         choose targets for selected skills
+u         update highlighted installed target/scope
+x         uninstall highlighted managed skill
 s         sync sources
 r         reload catalog
+?         help
 q         quit
 ```
 
-The TUI opens as a task-oriented selector: a concise summary header, a readable
-category tree, and an action bar. Skill rows show name, description, source, and
-triggers without a wide table; selected skills use a green `[✓]` marker. Press
-`enter` to open details for the highlighted skill. Press `i` after selecting
-skills to choose one or more supported assistants, then press `enter` to install
-to all selected targets. When a preset source screen is open, use `enter` to add
-the highlighted source or `esc` to return to skills. Use `n` to add a custom
-path or git URL from the TUI; custom source flags such as `--name` and `--ref`
-remain CLI-only.
+The TUI opens as a dashboard with sections for catalog skills, installed skills,
+sources, targets, and update commands. The Skills section keeps the readable
+category tree and green `[✓]` selection marker. Press `i` after selecting skills
+to choose one or more supported assistants, then press `enter` to install to all
+selected targets.
+
+The Installed section lists managed and unmanaged `SKILL.md` directories grouped
+by target/scope. Press `u` to update managed skills for the highlighted
+target/scope, or `x` to uninstall the highlighted managed skill after
+confirmation. Unmanaged uninstall remains CLI-only with explicit `--force`.
+
+The Sources section shows active sources, recommended presets, custom source
+entry, and source sync. The Update section intentionally does not run
+self-update from inside the TUI; it shows the exact CLI commands for `skillhub
+update`, cascade update, and managed skill update.
 
 Update `skillhub` itself without reinstalling skills:
 

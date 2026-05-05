@@ -34,7 +34,7 @@ func NewRootCommand() *cobra.Command {
 		Use:   "sources",
 		Short: "Manage skill sources",
 	}
-	sources.AddCommand(scriptCommand("list", "List configured skill sources", "scripts/sources.sh", []string{"list"}, cobra.NoArgs))
+	sources.AddCommand(sourceListCommand())
 	sources.AddCommand(scriptCommand("sync [source-name]", "Sync all sources or one source", "scripts/sources.sh", []string{"sync"}, cobra.MaximumNArgs(1)))
 	sources.AddCommand(sourceAddCommand())
 	sources.AddCommand(sourceRemoveCommand())
@@ -71,7 +71,7 @@ func NewRootCommand() *cobra.Command {
 	root.AddCommand(updateCommand())
 	root.AddCommand(&cobra.Command{
 		Use:   "tui",
-		Short: "Open the interactive skill selector",
+		Short: "Open the interactive skill dashboard",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			repoRoot, err := resolveRepoRoot()
 			if err != nil {
@@ -82,6 +82,28 @@ func NewRootCommand() *cobra.Command {
 	})
 
 	return root
+}
+
+func sourceListCommand() *cobra.Command {
+	var tsv bool
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List configured skill sources",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repoRoot, err := resolveRepoRoot()
+			if err != nil {
+				return err
+			}
+			scriptArgs := []string{"list"}
+			if tsv {
+				scriptArgs = append(scriptArgs, "--tsv")
+			}
+			return runScript(repoRoot, "scripts/sources.sh", scriptArgs...)
+		},
+	}
+	cmd.Flags().BoolVar(&tsv, "tsv", false, "print tab-separated output")
+	return cmd
 }
 
 func sourceAddCommand() *cobra.Command {

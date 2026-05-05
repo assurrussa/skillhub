@@ -337,6 +337,21 @@ update_all_supported_targets() {
   verbose="$2"
   touched=0
 
+  update_supported_root() {
+    root_target="$1"
+    root_scope="$2"
+    root_path="$3"
+
+    if [ "$(skillhub_count_managed_skill_dirs "$root_path")" -eq 0 ]; then
+      if [ "$verbose" -eq 1 ]; then
+        printf 'No managed skills in %s/%s: %s\n' "$root_target" "$root_scope" "$root_path"
+      fi
+      return 0
+    fi
+    touched=1
+    update_target_root "$root_path" "$root_target" "$root_scope" "$verbose" 0
+  }
+
   while IFS='	' read -r id label status adapter description extra; do
     case "$id" in
       ''|'#'*|'id'|directory)
@@ -347,15 +362,13 @@ update_all_supported_targets() {
     [ "$adapter" = "skill-dir" ] || continue
 
     for candidate_scope in global project; do
-      target_root=$(skillhub_target_root "$id" "$candidate_scope" "$project" "" 0 1)
-      if [ "$(skillhub_count_managed_skill_dirs "$target_root")" -eq 0 ]; then
-        if [ "$verbose" -eq 1 ]; then
-          printf 'No managed skills in %s/%s: %s\n' "$id" "$candidate_scope" "$target_root"
-        fi
-        continue
+      canonical_root=$(skillhub_target_root "$id" "$candidate_scope" "$project" "" 0 1)
+
+      if [ "$id" = "codex" ] && [ "$candidate_scope" = "global" ] && [ -n "${AGENT_SKILLS_DIR:-}" ] && [ "$AGENT_SKILLS_DIR" != "$canonical_root" ]; then
+        update_supported_root "$id" "$candidate_scope" "$AGENT_SKILLS_DIR"
       fi
-      touched=1
-      update_target_root "$target_root" "$id" "$candidate_scope" "$verbose" 0
+
+      update_supported_root "$id" "$candidate_scope" "$canonical_root"
     done
   done < "$(skillhub_targets_file)"
 

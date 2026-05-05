@@ -129,6 +129,30 @@ func TestViewShowsTaskOrientedSkillList(t *testing.T) {
 	}
 }
 
+func TestDashboardRendersSectionNavigation(t *testing.T) {
+	m := initialModel(".")
+	m.loading = false
+	m.width = 120
+	m.height = 30
+	m.skills = []Skill{
+		{Source: "agent-rules", Name: "go-project-rules", Category: "go", Description: "Go rules"},
+	}
+	m.applyFilter()
+
+	view := stripANSI(m.View())
+	for _, want := range []string{
+		"1 Skills",
+		"2 Installed",
+		"3 Sources",
+		"4 Targets",
+		"5 Update",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected dashboard navigation to contain %q, got:\n%s", want, view)
+		}
+	}
+}
+
 func TestEnterOpensSkillDetails(t *testing.T) {
 	m := initialModel(".")
 	m.loading = false
@@ -161,6 +185,222 @@ func TestEnterOpensSkillDetails(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected details view to contain %q, got:\n%s", want, view)
 		}
+	}
+}
+
+func TestParseInstalledTSV(t *testing.T) {
+	input := "target\tscope\tskill\tmanaged\tsource\tqualified_skill\tinstalled_path\tcontent_hash\tinstalled_at\tpath\n" +
+		"claude\tproject\trules-selector\tyes\tagent-rules\tagent-rules/rules-selector\t/tmp/project/.claude/skills/rules-selector\tabc\t2026-05-05T00:00:00Z\t/tmp/project/.claude/skills/rules-selector\n" +
+		"claude\tproject\tmanual-skill\tno\t-\t-\t/tmp/project/.claude/skills/manual-skill\t-\t-\t/tmp/project/.claude/skills/manual-skill\n"
+
+	rows, err := parseInstalledTSV(input)
+	if err != nil {
+		t.Fatalf("parseInstalledTSV returned error: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 installed rows, got %d", len(rows))
+	}
+	if rows[0].Target != "claude" || rows[0].Scope != "project" || rows[0].Managed != "yes" || rows[0].Source != "agent-rules" {
+		t.Fatalf("unexpected managed row: %#v", rows[0])
+	}
+	if rows[1].Managed != "no" {
+		t.Fatalf("expected unmanaged row, got %#v", rows[1])
+	}
+}
+
+func TestInstalledScreenGroupsRowsByTargetScope(t *testing.T) {
+	m := initialModel(".")
+	m.loading = false
+	m.width = 120
+	m.height = 40
+	m.viewMode = viewInstalled
+	m.installedRows = []InstalledSkill{
+		{Target: "codex", Scope: "global", Skill: "rules-selector", Managed: "yes", Source: "agent-rules", Path: "/tmp/codex/rules-selector"},
+		{Target: "claude", Scope: "project", Skill: "manual-skill", Managed: "no", Source: "-", Path: "/tmp/project/.claude/skills/manual-skill"},
+	}
+
+	view := stripANSI(m.View())
+	for _, want := range []string{
+		"Installed skills",
+		"[M] managed by Skillhub",
+		"[ ] unmanaged: read-only in TUI",
+		"Codex global",
+		"[M] rules-selector",
+		"source: agent-rules",
+		"Claude project",
+		"[ ] manual-skill",
+		"unmanaged",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected installed screen to contain %q, got:\n%s", want, view)
+		}
+	}
+}
+
+func TestInstalledUpdateAndUninstallArgs(t *testing.T) {
+	row := InstalledSkill{Target: "claude", Scope: "project", Skill: "rules-selector"}
+	project := "/tmp/project"
+
+	updateWant := []string{"update", "--target", "claude", "--scope", "project", "--project", project}
+	if got := installedUpdateArgsForRow(row, project); strings.Join(got, " ") != strings.Join(updateWant, " ") {
+		t.Fatalf("expected update args %#v, got %#v", updateWant, got)
+	}
+
+	uninstallWant := []string{"uninstall", "rules-selector", "--target", "claude", "--scope", "project", "--project", project}
+	if got := installedUninstallArgsForRow(row, project); strings.Join(got, " ") != strings.Join(uninstallWant, " ") {
+		t.Fatalf("expected uninstall args %#v, got %#v", uninstallWant, got)
+	}
+}
+
+func TestInstalledArgsUseLegacyCodexEnv(t *testing.T) {
+	t.Setenv("AGENT_SKILLS_DIR", "/tmp/legacy-skills")
+	row := InstalledSkill{Target: "codex", Scope: "global", Skill: "rules-selector", Path: "/tmp/legacy-skills/rules-selector"}
+
+	if got := installedListArgs("codex", "global", "/tmp/project"); strings.Join(got, " ") != "list --tsv" {
+		t.Fatalf("expected legacy list args, got %#v", got)
+	}
+	if got := installedUpdateArgsForRow(row, "/tmp/project"); strings.Join(got, " ") != "update" {
+		t.Fatalf("expected legacy update args, got %#v", got)
+	}
+	if got := installedUninstallArgsForRow(row, "/tmp/project"); strings.Join(got, " ") != "uninstall rules-selector" {
+		t.Fatalf("expected legacy uninstall args, got %#v", got)
+	}
+}
+
+func TestParseActiveSourcesTSV(t *testing.T) {
+	input := "name\ttype\tlocation\tref\tcatalog\n" +
+		"agent-rules\tgit\tgit@github.com:assurrussa/agent-rules.git\tmain\tcatalog/skills.tsv\n"
+
+	sources, err := parseSourcesTSV(input)
+	if err != nil {
+		t.Fatalf("parseSourcesTSV returned error: %v", err)
+	}
+	if len(sources) != 1 || sources[0].Name != "agent-rules" || sources[0].Catalog != "catalog/skills.tsv" {
+		t.Fatalf("unexpected sources: %#v", sources)
+	}
+}
+
+func TestUpdateScreenShowsCommandsWithoutRunningSelfUpdate(t *testing.T) {
+	m := initialModel(".")
+	m.loading = false
+	m.width = 120
+	m.height = 30
+	m.viewMode = viewUpdate
+
+	view := stripANSI(m.View())
+	for _, want := range []string{
+		"Update",
+		"skillhub update",
+		"skillhub update --cascade",
+		"skillhub update --cascade -v",
+		"skillhub installed update",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected update screen to contain %q, got:\n%s", want, view)
+		}
+	}
+}
+
+func TestAddSourceInputAcceptsDashboardShortcutDigits(t *testing.T) {
+	m := initialModel(".")
+	m.loading = false
+	m.viewMode = viewAddSource
+
+	for _, key := range []string{"r", "u", "l", "e", "s", "-", "v", "2"} {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+		m = updated.(model)
+	}
+
+	if m.viewMode != viewAddSource {
+		t.Fatalf("expected to stay in add-source view, got %q", m.viewMode)
+	}
+	if m.sourceInput != "rules-v2" {
+		t.Fatalf("expected source input to include digits, got %q", m.sourceInput)
+	}
+}
+
+func TestInstalledCommandSummarySurvivesReload(t *testing.T) {
+	m := initialModel(".")
+	m.loading = false
+	m.viewMode = viewInstalled
+
+	updated, _ := m.Update(commandDoneMsg{
+		action: "Update installed",
+		output: "Summary codex/global: updated=0 unchanged=1 skipped=0 failed=0\nUpdated: 0, unchanged: 1, skipped: 0, failed: 0\n",
+	})
+	m = updated.(model)
+	if !m.loading {
+		t.Fatalf("expected installed reload after update")
+	}
+
+	updated, _ = m.Update(installedLoadedMsg{rows: []InstalledSkill{
+		{Target: "codex", Scope: "global", Skill: "rules-selector", Managed: "yes", Source: "agent-rules", Path: "/tmp/skills/rules-selector"},
+	}})
+	m = updated.(model)
+
+	if !strings.Contains(m.status, "Updated: 0, unchanged: 1, skipped: 0, failed: 0") {
+		t.Fatalf("expected update summary to remain visible, got %q", m.status)
+	}
+}
+
+func TestQuestionMarkOpensHelpOverlay(t *testing.T) {
+	m := initialModel(".")
+	m.loading = false
+	m.width = 120
+	m.height = 30
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("?")})
+	m = updated.(model)
+	if m.viewMode != viewHelp {
+		t.Fatalf("expected help view, got %q", m.viewMode)
+	}
+	view := stripANSI(m.View())
+	for _, want := range []string{
+		"Help",
+		"1/2/3/4/5",
+		"left/right",
+		"u           update",
+		"x           uninstall",
+		"[M]         managed by Skillhub",
+		"[ ]         unmanaged local skill",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected help overlay to contain %q, got:\n%s", want, view)
+		}
+	}
+}
+
+func TestLeftRightSwitchDashboardSections(t *testing.T) {
+	m := initialModel(".")
+	m.loading = false
+	m.width = 120
+	m.height = 30
+	m.viewMode = viewSkills
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m = updated.(model)
+	if m.viewMode != viewInstalled || !m.loading {
+		t.Fatalf("expected right from skills to load installed section, got view=%q loading=%v", m.viewMode, m.loading)
+	}
+
+	m.loading = false
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	m = updated.(model)
+	if m.viewMode != viewSkills || !m.loading {
+		t.Fatalf("expected left from installed to load skills section, got view=%q loading=%v", m.viewMode, m.loading)
+	}
+}
+
+func TestLeftRightDoesNotLeaveInstallTargetPicker(t *testing.T) {
+	m := initialModel(".")
+	m.loading = false
+	m.viewMode = viewTargets
+	m.targetPurpose = "install"
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m = updated.(model)
+	if m.viewMode != viewTargets || m.loading {
+		t.Fatalf("expected install target picker to ignore right arrow, got view=%q loading=%v", m.viewMode, m.loading)
 	}
 }
 

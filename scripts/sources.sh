@@ -7,7 +7,7 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 usage() {
   printf '%s\n' \
     'Usage:' \
-    '  sh scripts/sources.sh list' \
+    '  sh scripts/sources.sh list [--tsv]' \
     '  sh scripts/sources.sh sync [source-name]' \
     '  sh scripts/sources.sh defaults list [--tsv]' \
     '  sh scripts/sources.sh defaults add <source-name>' \
@@ -68,10 +68,25 @@ validate_path_source_or_exit() {
 
 case "$cmd" in
   list)
+    format="table"
+    if [ "${2:-}" = "--tsv" ]; then
+      format="tsv"
+      if [ "$#" -gt 2 ]; then
+        usage >&2
+        exit 1
+      fi
+    elif [ "$#" -gt 1 ]; then
+      usage >&2
+      exit 1
+    fi
     sources_file=$(skillhub_active_sources_file)
     trap 'rm -f "$sources_file"' EXIT HUP INT TERM
-    printf '%-20s %-8s %-48s %-12s %s\n' "name" "type" "location" "ref" "catalog"
-    printf '%-20s %-8s %-48s %-12s %s\n' "--------------------" "--------" "------------------------------------------------" "------------" "-------"
+    if [ "$format" = "tsv" ]; then
+      printf 'name\ttype\tlocation\tref\tcatalog\n'
+    else
+      printf '%-20s %-8s %-48s %-12s %s\n' "name" "type" "location" "ref" "catalog"
+      printf '%-20s %-8s %-48s %-12s %s\n' "--------------------" "--------" "------------------------------------------------" "------------" "-------"
+    fi
     listed=0
     while IFS='	' read -r name type location ref catalog extra; do
       case "$name" in
@@ -79,10 +94,14 @@ case "$cmd" in
           continue
           ;;
       esac
-      printf '%-20s %-8s %-48s %-12s %s\n' "$name" "$type" "$location" "$ref" "$catalog"
+      if [ "$format" = "tsv" ]; then
+        printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$type" "$location" "$ref" "$catalog"
+      else
+        printf '%-20s %-8s %-48s %-12s %s\n' "$name" "$type" "$location" "$ref" "$catalog"
+      fi
       listed=$((listed + 1))
     done < "$sources_file"
-    if [ "$listed" -eq 0 ]; then
+    if [ "$listed" -eq 0 ] && [ "$format" != "tsv" ]; then
       printf 'No sources configured. Run: skillhub sources defaults list\n'
     fi
     ;;

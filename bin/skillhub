@@ -18,7 +18,7 @@ fi
 usage() {
   printf '%s\n' \
     'Usage:' \
-    '  skillhub sources list' \
+    '  skillhub sources list [--tsv]' \
     '  skillhub sources sync [source-name]' \
     '  skillhub sources defaults list' \
     '  skillhub sources defaults add <source-name>' \

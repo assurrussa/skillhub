@@ -97,6 +97,9 @@ skillhub targets detect
 skillhub targets detect --tsv --project /path/to/project
 skillhub installed list
 skillhub installed list --target claude --scope project --project /path/to/project
+skillhub installed update
+skillhub installed update --target claude --scope project --project /path/to/project
+skillhub installed update --target directory --dir /tmp/skills -v
 skillhub installed uninstall rules-selector
 skillhub installed uninstall rules-selector --target directory --dir /tmp/skills
 skillhub skills list
@@ -110,6 +113,8 @@ skillhub skills install rules-selector --target directory --dir /tmp/skills
 skillhub skills install --all
 skillhub tui
 skillhub update
+skillhub update --cascade
+skillhub update --cascade -v
 skillhub version
 ```
 
@@ -159,6 +164,18 @@ skillhub version
 
 `skillhub update` refreshes the source checkout and rebuilds the installed
 binary. Installed skills are not modified.
+
+Update `skillhub` and managed installed skills together:
+
+```sh
+skillhub update --cascade
+skillhub update --cascade -v
+```
+
+Cascade update first updates the `skillhub` command, then updates managed
+installed skills across supported global targets and project targets for the
+current directory. It only touches skill directories with `.skillhub.json`.
+Use `-v` or `--verbose` to print per-skill target, hash, and result details.
 
 Sources are stored outside the installed checkout:
 
@@ -221,6 +238,19 @@ skillhub installed list
 skillhub installed list --target claude --scope project --project /path/to/project
 skillhub installed list --target directory --dir /tmp/skills --tsv
 ```
+
+Update managed installed skills:
+
+```sh
+skillhub installed update
+skillhub installed update --target claude --scope project --project /path/to/project
+skillhub installed update --target directory --dir /tmp/skills -v
+```
+
+`installed update` syncs the source recorded in `.skillhub.json`, compares the
+installed skill hash with the current source skill, and rewrites only changed
+managed skills. If the source or catalog entry is missing, the skill is skipped
+and left installed.
 
 Uninstall managed skills:
 

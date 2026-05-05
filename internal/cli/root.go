@@ -52,6 +52,7 @@ func NewRootCommand() *cobra.Command {
 		Short: "Inspect installed skills",
 	}
 	installed.AddCommand(installedListCommand())
+	installed.AddCommand(installedUpdateCommand())
 	installed.AddCommand(installedUninstallCommand())
 
 	skills := &cobra.Command{
@@ -233,6 +234,48 @@ func installedListCommand() *cobra.Command {
 	cmd.Flags().StringVar(&project, "project", "", "project directory for project-scope installs")
 	cmd.Flags().StringVar(&dir, "dir", "", "explicit directory for --target directory")
 	cmd.Flags().BoolVar(&tsv, "tsv", false, "print tab-separated output")
+	return cmd
+}
+
+func installedUpdateCommand() *cobra.Command {
+	var target string
+	var scope string
+	var project string
+	var dir string
+	var verbose bool
+	cmd := &cobra.Command{
+		Use:   "update",
+		Short: "Update managed installed skills for a target",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repoRoot, err := resolveRepoRoot()
+			if err != nil {
+				return err
+			}
+			scriptArgs := []string{"update"}
+			if cmd.Flags().Changed("target") {
+				scriptArgs = append(scriptArgs, "--target", target)
+			}
+			if cmd.Flags().Changed("scope") {
+				scriptArgs = append(scriptArgs, "--scope", scope)
+			}
+			if cmd.Flags().Changed("project") {
+				scriptArgs = append(scriptArgs, "--project", project)
+			}
+			if cmd.Flags().Changed("dir") {
+				scriptArgs = append(scriptArgs, "--dir", dir)
+			}
+			if verbose {
+				scriptArgs = append(scriptArgs, "--verbose")
+			}
+			return runScript(repoRoot, "scripts/installed.sh", scriptArgs...)
+		},
+	}
+	cmd.Flags().StringVar(&target, "target", "", "install target id; defaults to codex")
+	cmd.Flags().StringVar(&scope, "scope", "", "install scope for scoped targets: global or project")
+	cmd.Flags().StringVar(&project, "project", "", "project directory for project-scope installs")
+	cmd.Flags().StringVar(&dir, "dir", "", "explicit directory for --target directory")
+	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "print per-skill update details")
 	return cmd
 }
 

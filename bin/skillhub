@@ -27,13 +27,14 @@ usage() {
     '  skillhub targets list' \
     '  skillhub targets detect' \
     '  skillhub installed list' \
+    '  skillhub installed update' \
     '  skillhub installed uninstall <skill>' \
     '  skillhub skills list' \
     '  skillhub skills search <query>' \
     '  skillhub skills install [--target <target>] [--scope global|project] [<source>/]<skill-name>...' \
     '  skillhub skills install --all' \
     '  skillhub tui' \
-    '  skillhub update' \
+    '  skillhub update [--cascade] [-v|--verbose]' \
     '  skillhub version' \
     '' \
     'Short aliases:' \

@@ -36,6 +36,8 @@ func versionCommand() *cobra.Command {
 
 func updateCommand() *cobra.Command {
 	var binDir string
+	var cascade bool
+	var verbose bool
 	cmd := &cobra.Command{
 		Use:   "update",
 		Short: "Update skillhub from its installed checkout",
@@ -57,10 +59,27 @@ func updateCommand() *cobra.Command {
 			updateCmd.Stdout = cmd.OutOrStdout()
 			updateCmd.Stderr = cmd.ErrOrStderr()
 			updateCmd.Stdin = os.Stdin
-			return updateCmd.Run()
+			if err := updateCmd.Run(); err != nil {
+				return err
+			}
+
+			if !cascade {
+				return nil
+			}
+
+			out := cmd.OutOrStdout()
+			fmt.Fprintln(out, "Updating managed installed skills...")
+			repoRoot := filepath.Dir(script)
+			skillArgs := []string{"update", "--all-supported"}
+			if verbose {
+				skillArgs = append(skillArgs, "--verbose")
+			}
+			return runScript(repoRoot, "scripts/installed.sh", skillArgs...)
 		},
 	}
 	cmd.Flags().StringVar(&binDir, "bin-dir", "", "install directory for the skillhub command")
+	cmd.Flags().BoolVar(&cascade, "cascade", false, "also update managed installed skills after updating skillhub")
+	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "print per-skill cascade update details")
 	return cmd
 }
 

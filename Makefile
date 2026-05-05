@@ -36,7 +36,8 @@ diff-check:
 verify: check vet diff-check
 
 smoke-temp:
-	@tmp=$$(mktemp -d); \
+	@set -e; \
+	tmp=$$(mktemp -d); \
 	project="$$tmp/project"; \
 	mkdir -p "$$project"; \
 	printf 'Using temp dir: %s\n' "$$tmp"; \
@@ -46,14 +47,27 @@ smoke-temp:
 	SKILLHUB_CONFIG_DIR="$$tmp/config" \
 	SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" \
 	$(SKILLHUB) search go; \
-	SKILLHUB_CONFIG_DIR="$$tmp/config" \
-	SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" \
-	AGENT_SKILLS_DIR="$$tmp/skills" \
-	$(SKILLHUB) install rules-selector; \
-	test -f "$$tmp/skills/rules-selector/SKILL.md"; \
-	test -f "$$tmp/skills/rules-selector/.skillhub.json"; \
-	SKILLHUB_CONFIG_DIR="$$tmp/config" \
-	$(SKILLHUB) installed list --target directory --dir "$$tmp/skills"; \
+		SKILLHUB_CONFIG_DIR="$$tmp/config" \
+		SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" \
+		AGENT_SKILLS_DIR="$$tmp/skills" \
+		$(SKILLHUB) install rules-selector; \
+		SKILLHUB_CONFIG_DIR="$$tmp/config" \
+		$(SKILLHUB) installed usage rules-selector --tsv | grep 'rules-selector'; \
+		test -f "$$tmp/skills/rules-selector/SKILL.md"; \
+		test -f "$$tmp/skills/rules-selector/.skillhub.json"; \
+		SKILLHUB_CONFIG_DIR="$$tmp/config" \
+		SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" \
+		$(SKILLHUB) install rules-selector --target codex --scope project --project "$$project"; \
+		SKILLHUB_CONFIG_DIR="$$tmp/config" \
+		$(SKILLHUB) installed usage rules-selector --tsv | grep "$$project"; \
+		SKILLHUB_CONFIG_DIR="$$tmp/config" \
+		SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" \
+		$(SKILLHUB) installed usage update --projects rules-selector -v; \
+		SKILLHUB_CONFIG_DIR="$$tmp/config" \
+		SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" \
+		$(SKILLHUB) recommend --project "$$project"; \
+		SKILLHUB_CONFIG_DIR="$$tmp/config" \
+		$(SKILLHUB) installed list --target directory --dir "$$tmp/skills"; \
 	SKILLHUB_CONFIG_DIR="$$tmp/config" \
 	$(SKILLHUB) installed update --target directory --dir "$$tmp/skills"; \
 	SKILLHUB_CONFIG_DIR="$$tmp/config" \

@@ -208,6 +208,44 @@ func TestParseInstalledTSV(t *testing.T) {
 	}
 }
 
+func TestParseInstalledUsageTSV(t *testing.T) {
+	input := "source\tskill\ttarget\tscope\tproject_path\ttarget_root\tinstalled_path\tsource_ref\tsource_location\tcatalog\tcontent_hash\tinstalled_at\tupdated_at\n" +
+		"agent-rules\trules-selector\tcodex\tproject\t/tmp/project\t/tmp/project/.agents/skills\t/tmp/project/.agents/skills/rules-selector\tmain\tgit@example.com:rules.git\tcatalog/skills.tsv\tabc\t2026-05-05T00:00:00Z\t2026-05-05T01:00:00Z\n"
+
+	rows, err := parseInstalledUsageTSV(input)
+	if err != nil {
+		t.Fatalf("parseInstalledUsageTSV returned error: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 usage row, got %d", len(rows))
+	}
+	row := rows[0]
+	if row.Target != "codex" || row.Scope != "project" || row.ProjectPath != "/tmp/project" || !row.RegistryOnly {
+		t.Fatalf("unexpected usage row: %#v", row)
+	}
+}
+
+func TestMergeInstalledUsageRowsSkipsScannedDuplicates(t *testing.T) {
+	scanned := []InstalledSkill{
+		{Target: "codex", Scope: "project", Skill: "rules-selector", InstalledPath: "/tmp/project/.agents/skills/rules-selector", Path: "/tmp/project/.agents/skills/rules-selector"},
+	}
+	usageRows := []InstalledSkill{
+		{Target: "codex", Scope: "project", Skill: "rules-selector", ProjectPath: "/tmp/project", TargetRoot: "/tmp/project/.agents/skills", InstalledPath: "/tmp/project/.agents/skills/rules-selector", Path: "/tmp/project/.agents/skills/rules-selector", RegistryOnly: true},
+		{Target: "claude", Scope: "project", Skill: "rules-selector", InstalledPath: "/tmp/other/.claude/skills/rules-selector", Path: "/tmp/other/.claude/skills/rules-selector", RegistryOnly: true},
+	}
+
+	rows := mergeInstalledUsageRows(scanned, usageRows)
+	if len(rows) != 2 {
+		t.Fatalf("expected scanned duplicate to be skipped, got %#v", rows)
+	}
+	if !rows[0].RegistryOnly || rows[0].ProjectPath != "/tmp/project" || rows[0].TargetRoot != "/tmp/project/.agents/skills" {
+		t.Fatalf("expected scanned duplicate to be enriched from registry, got %#v", rows[0])
+	}
+	if !rows[1].RegistryOnly || rows[1].Target != "claude" {
+		t.Fatalf("expected usage-only claude row, got %#v", rows[1])
+	}
+}
+
 func TestInstalledScreenGroupsRowsByTargetScope(t *testing.T) {
 	m := initialModel(".")
 	m.loading = false
@@ -216,24 +254,120 @@ func TestInstalledScreenGroupsRowsByTargetScope(t *testing.T) {
 	m.viewMode = viewInstalled
 	m.installedRows = []InstalledSkill{
 		{Target: "codex", Scope: "global", Skill: "rules-selector", Managed: "yes", Source: "agent-rules", Path: "/tmp/codex/rules-selector"},
-		{Target: "claude", Scope: "project", Skill: "manual-skill", Managed: "no", Source: "-", Path: "/tmp/project/.claude/skills/manual-skill"},
+		{Target: "claude", Scope: "project", Skill: "manual-skill", Managed: "no", Source: "-", ProjectPath: "/tmp/project", Path: "/tmp/project/.claude/skills/manual-skill"},
+		{Target: "gemini", Scope: "project", Skill: "rules-selector", Managed: "yes", Source: "agent-rules", ProjectPath: "/tmp/other-project", Path: "/tmp/other-project/.gemini/skills/rules-selector", RegistryOnly: true},
+		{Target: "directory", Scope: "custom", Skill: "docs-project-rules", Managed: "yes", Source: "agent-rules", TargetRoot: "/tmp/skills", Path: "/tmp/skills/docs-project-rules"},
 	}
 
 	view := stripANSI(m.View())
 	for _, want := range []string{
 		"Installed skills",
+		"Installed: 4",
+		"Skills: 3",
+		"Projects: 2",
+		"Managed: 3",
 		"[M] managed by Skillhub",
 		"[ ] unmanaged: read-only in TUI",
-		"Codex global",
+		"Global",
 		"[M] rules-selector",
 		"source: agent-rules",
-		"Claude project",
+		"Projects",
+		"Project /tmp/project",
 		"[ ] manual-skill",
 		"unmanaged",
+		"Project /tmp/other-project",
+		"registry",
+		"Custom directories",
+		"/tmp/skills",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected installed screen to contain %q, got:\n%s", want, view)
 		}
+	}
+}
+
+func TestEnterOpensInstalledSkillDetails(t *testing.T) {
+	m := initialModel(".")
+	m.loading = false
+	m.width = 120
+	m.height = 40
+	m.viewMode = viewInstalled
+	m.installedRows = []InstalledSkill{
+		{Target: "codex", Scope: "global", Skill: "rules-selector", Managed: "yes", Source: "agent-rules", Path: "/tmp/codex/rules-selector"},
+		{Target: "gemini", Scope: "project", Skill: "rules-selector", Managed: "yes", Source: "agent-rules", ProjectPath: "/tmp/project-b", Path: "/tmp/project-b/.gemini/skills/rules-selector", RegistryOnly: true, ContentHash: "abc", UpdatedAt: "2026-05-05T01:00:00Z"},
+		{Target: "claude", Scope: "project", Skill: "manual-skill", Managed: "no", Source: "-", ProjectPath: "/tmp/project-a", Path: "/tmp/project-a/.claude/skills/manual-skill"},
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if m.viewMode != viewInstalledDetails {
+		t.Fatalf("expected installed details view, got %q", m.viewMode)
+	}
+
+	view := stripANSI(m.View())
+	for _, want := range []string{
+		"Installed skill details",
+		"agent-rules/rules-selector",
+		"Installed in: 2",
+		"Codex global",
+		"LOCAL PROJECT",
+		"Gemini project",
+		"Project root: /tmp/project-b",
+		"    source: agent-rules",
+		"hash: abc",
+		"updated: 2026-05-05T01:00:00Z",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected installed details to contain %q, got:\n%s", want, view)
+		}
+	}
+}
+
+func TestInstalledDetailsActionsUseHighlightedLocation(t *testing.T) {
+	m := initialModel(".")
+	m.loading = false
+	m.width = 120
+	m.height = 40
+	m.viewMode = viewInstalled
+	m.installedRows = []InstalledSkill{
+		{Target: "codex", Scope: "global", Skill: "rules-selector", Managed: "yes", Source: "agent-rules", Path: "/tmp/codex/rules-selector"},
+		{Target: "gemini", Scope: "project", Skill: "rules-selector", Managed: "yes", Source: "agent-rules", ProjectPath: "/tmp/project-b", Path: "/tmp/project-b/.gemini/skills/rules-selector", RegistryOnly: true},
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(model)
+
+	row, ok := m.currentInstalledDetail()
+	if !ok {
+		t.Fatalf("expected highlighted installed details row")
+	}
+	want := []string{"update", "--target", "gemini", "--scope", "project", "--project", "/tmp/project-b"}
+	if got := installedUpdateArgsForRow(row, "/tmp/fallback"); strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("expected details update args %#v, got %#v", want, got)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	m = updated.(model)
+	if m.viewMode != viewConfirmDelete {
+		t.Fatalf("expected confirm delete, got %q", m.viewMode)
+	}
+	if m.pendingUninstall.ProjectPath != "/tmp/project-b" {
+		t.Fatalf("expected pending uninstall to use highlighted details row, got %#v", m.pendingUninstall)
+	}
+}
+
+func TestEscReturnsFromInstalledDetails(t *testing.T) {
+	m := initialModel(".")
+	m.loading = false
+	m.viewMode = viewInstalledDetails
+	m.installedDetailKey = "agent-rules/rules-selector"
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(model)
+	if m.viewMode != viewInstalled {
+		t.Fatalf("expected installed view after esc, got %q", m.viewMode)
 	}
 }
 
@@ -249,6 +383,18 @@ func TestInstalledUpdateAndUninstallArgs(t *testing.T) {
 	uninstallWant := []string{"uninstall", "rules-selector", "--target", "claude", "--scope", "project", "--project", project}
 	if got := installedUninstallArgsForRow(row, project); strings.Join(got, " ") != strings.Join(uninstallWant, " ") {
 		t.Fatalf("expected uninstall args %#v, got %#v", uninstallWant, got)
+	}
+
+	registryRow := InstalledSkill{Target: "gemini", Scope: "project", Skill: "rules-selector", ProjectPath: "/tmp/recorded-project"}
+	registryWant := []string{"update", "--target", "gemini", "--scope", "project", "--project", "/tmp/recorded-project"}
+	if got := installedUpdateArgsForRow(registryRow, project); strings.Join(got, " ") != strings.Join(registryWant, " ") {
+		t.Fatalf("expected registry update args %#v, got %#v", registryWant, got)
+	}
+
+	directoryRow := InstalledSkill{Target: "directory", Scope: "custom", Skill: "rules-selector", TargetRoot: "/tmp/skills"}
+	directoryWant := []string{"uninstall", "rules-selector", "--target", "directory", "--dir", "/tmp/skills"}
+	if got := installedUninstallArgsForRow(directoryRow, project); strings.Join(got, " ") != strings.Join(directoryWant, " ") {
+		t.Fatalf("expected directory uninstall args %#v, got %#v", directoryWant, got)
 	}
 }
 

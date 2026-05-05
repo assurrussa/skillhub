@@ -28,6 +28,10 @@ required at runtime, and user-added sources live outside the checkout.
 - Active sources are user config only:
   `${XDG_CONFIG_HOME:-$HOME/.config}/skillhub/sources.tsv`, or
   `SKILLHUB_CONFIG_DIR/sources.tsv` in tests.
+- Managed install usage is user config only:
+  `${XDG_CONFIG_HOME:-$HOME/.config}/skillhub/installed.tsv`, or
+  `SKILLHUB_CONFIG_DIR/installed.tsv` in tests. It tracks only
+  Skillhub-managed installs created or updated by Skillhub.
 - `targets/targets.tsv` is the registry for supported and planned install
   targets. Do not write to an assistant-specific format until its current path
   and file contract are verified.
@@ -40,6 +44,11 @@ required at runtime, and user-added sources live outside the checkout.
   `agent-rules` preset against a sibling checkout.
 - Preserve legacy Codex install behavior: `skillhub install <skill>` and
   `AGENT_SKILLS_DIR=/tmp/skills skillhub install <skill>` must keep working.
+- Project-scope installs must record the resolved project path in metadata and
+  `installed.tsv`; global and custom directory installs use `project_path=-`.
+- Recommendation flow is read-only. `skillhub recommend` analyzes active source
+  catalogs and project signals, then prints install commands without running
+  them.
 - For TUI changes, cover cursor movement, selection state, and rendered output
   with `internal/tui` tests when practical.
 - Use Context7 for current Cobra, Bubble Tea, Lip Gloss, or other library docs
@@ -62,4 +71,3 @@ sh scripts/check.sh
 go vet ./...
 git diff --check
 ```
-

@@ -48,6 +48,14 @@ skillhub_targets_header() {
   printf 'id\tlabel\tstatus\tadapter\tdescription\n'
 }
 
+skillhub_installed_header() {
+  printf 'source\tskill\ttarget\tscope\tproject_path\ttarget_root\tinstalled_path\tsource_ref\tsource_location\tcatalog\tcontent_hash\tinstalled_at\tupdated_at\n'
+}
+
+skillhub_installed_registry_file() {
+  printf '%s/installed.tsv\n' "$(skillhub_config_root)"
+}
+
 skillhub_cache_root() {
   if [ -n "${SKILLHUB_CACHE_DIR:-}" ]; then
     printf '%s\n' "$SKILLHUB_CACHE_DIR"
@@ -137,11 +145,16 @@ skillhub_default_opencode_skills_dir() {
 skillhub_project_dir() {
   project="$1"
   if [ -n "$project" ]; then
-    skillhub_abs_path "$project" "$(skillhub_caller_cwd)"
-    return
+    resolved_project=$(skillhub_abs_path "$project" "$(skillhub_caller_cwd)")
+  else
+    resolved_project=$(skillhub_abs_path "$(skillhub_caller_cwd)" /)
   fi
 
-  skillhub_abs_path "$(skillhub_caller_cwd)" /
+  if [ -d "$resolved_project" ]; then
+    CDPATH= cd -- "$resolved_project" && pwd
+  else
+    printf '%s\n' "$resolved_project"
+  fi
 }
 
 skillhub_is_valid_target_id() {
@@ -345,6 +358,145 @@ skillhub_now_utc() {
   date -u '+%Y-%m-%dT%H:%M:%SZ'
 }
 
+skillhub_validate_installed_registry_file() {
+  file=$(skillhub_installed_registry_file)
+  if [ ! -f "$file" ]; then
+    return 0
+  fi
+
+  if ! awk 'NR == 1 { exit ($0 == "source\tskill\ttarget\tscope\tproject_path\ttarget_root\tinstalled_path\tsource_ref\tsource_location\tcatalog\tcontent_hash\tinstalled_at\tupdated_at" ? 0 : 1) }' "$file"; then
+    printf 'Installed registry header must be: source<TAB>skill<TAB>target<TAB>scope<TAB>project_path<TAB>target_root<TAB>installed_path<TAB>source_ref<TAB>source_location<TAB>catalog<TAB>content_hash<TAB>installed_at<TAB>updated_at in %s\n' "$file" >&2
+    exit 1
+  fi
+}
+
+skillhub_ensure_installed_registry_file() {
+  file=$(skillhub_installed_registry_file)
+  mkdir -p "$(dirname -- "$file")"
+  if [ ! -f "$file" ]; then
+    skillhub_installed_header > "$file"
+  fi
+  skillhub_validate_installed_registry_file
+}
+
+skillhub_usage_filter_matches() {
+  filter="$1"
+  source_name="$2"
+  skill_name="$3"
+
+  if [ -z "$filter" ]; then
+    return 0
+  fi
+
+  case "$filter" in
+    */*)
+      [ "$filter" = "$source_name/$skill_name" ]
+      ;;
+    *)
+      [ "$filter" = "$skill_name" ]
+      ;;
+  esac
+}
+
+skillhub_emit_installed_usage_tsv() {
+  filter="${1:-}"
+  file=$(skillhub_installed_registry_file)
+
+  skillhub_installed_header
+  if [ ! -f "$file" ]; then
+    return
+  fi
+  skillhub_validate_installed_registry_file
+
+  awk -F '	' -v filter="$filter" '
+    NR == 1 { next }
+    $0 == "" || $0 ~ /^#/ { next }
+    {
+      if (NF != 13) {
+        printf "Installed registry row has wrong column count for %s/%s\n", $1, $2 > "/dev/stderr"
+        exit 1
+      }
+      if (filter == "" || $2 == filter || ($1 "/" $2) == filter) {
+        print
+      }
+    }
+  ' "$file"
+}
+
+skillhub_upsert_installed_usage() {
+  source_name="$1"
+  skill_name="$2"
+  target="$3"
+  scope="$4"
+  project_path="$5"
+  target_root="$6"
+  installed_path="$7"
+  source_ref="$8"
+  source_location="$9"
+  source_catalog="${10}"
+  content_hash="${11}"
+  installed_at="${12}"
+  updated_at="${13}"
+
+  skillhub_ensure_installed_registry_file
+  file=$(skillhub_installed_registry_file)
+  tmp_file=$(mktemp "${TMPDIR:-/tmp}/skillhub-installed.XXXXXX")
+
+  {
+    skillhub_installed_header
+    awk -F '	' \
+      -v source_name="$source_name" \
+      -v skill_name="$skill_name" \
+      -v target="$target" \
+      -v scope="$scope" \
+      -v project_path="$project_path" \
+      -v installed_path="$installed_path" '
+      NR == 1 { next }
+      $0 == "" || $0 ~ /^#/ { next }
+      $7 != installed_path {
+        print
+      }
+    ' "$file"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$source_name" \
+      "$skill_name" \
+      "$target" \
+      "$scope" \
+      "$project_path" \
+      "$target_root" \
+      "$installed_path" \
+      "$source_ref" \
+      "$source_location" \
+      "$source_catalog" \
+      "$content_hash" \
+      "$installed_at" \
+      "$updated_at"
+  } > "$tmp_file"
+
+  mv "$tmp_file" "$file"
+}
+
+skillhub_remove_installed_usage_by_path() {
+  installed_path="$1"
+  file=$(skillhub_installed_registry_file)
+  if [ ! -f "$file" ]; then
+    return 0
+  fi
+  skillhub_validate_installed_registry_file
+  tmp_file=$(mktemp "${TMPDIR:-/tmp}/skillhub-installed.XXXXXX")
+
+  {
+    skillhub_installed_header
+    awk -F '	' -v installed_path="$installed_path" '
+      NR == 1 { next }
+      $0 == "" || $0 ~ /^#/ { next }
+      $7 != installed_path { print }
+    ' "$file"
+  } > "$tmp_file"
+
+  mv "$tmp_file" "$file"
+}
+
 skillhub_sha256_stream() {
   if command -v shasum >/dev/null 2>&1; then
     shasum -a 256 | awk '{ print $1 }'
@@ -391,26 +543,50 @@ skillhub_write_install_metadata() {
   source_location="$9"
   source_catalog="${10}"
   content_hash="${11}"
-  installed_at=$(skillhub_now_utc)
+  project_path="${12:--}"
+  previous_installed_at="${13:-}"
+  now=$(skillhub_now_utc)
+  installed_at="$previous_installed_at"
+  if [ -z "$installed_at" ] || [ "$installed_at" = "-" ]; then
+    installed_at="$now"
+  fi
+  updated_at="$now"
 
   metadata_file="$installed_path/.skillhub.json"
   cat > "$metadata_file" <<EOF
 {
-  "schema_version": "1",
+  "schema_version": "2",
   "source": "$(skillhub_json_escape "$source_name")",
   "skill": "$(skillhub_json_escape "$skill_name")",
   "qualified_skill": "$(skillhub_json_escape "$qualified_skill")",
   "target": "$(skillhub_json_escape "$target")",
   "scope": "$(skillhub_json_escape "$scope")",
+  "project_path": "$(skillhub_json_escape "$project_path")",
   "target_root": "$(skillhub_json_escape "$target_root")",
   "installed_path": "$(skillhub_json_escape "$installed_path")",
   "source_ref": "$(skillhub_json_escape "$source_ref")",
   "source_location": "$(skillhub_json_escape "$source_location")",
   "catalog": "$(skillhub_json_escape "$source_catalog")",
   "content_hash": "$(skillhub_json_escape "$content_hash")",
-  "installed_at": "$(skillhub_json_escape "$installed_at")"
+  "installed_at": "$(skillhub_json_escape "$installed_at")",
+  "updated_at": "$(skillhub_json_escape "$updated_at")"
 }
 EOF
+
+  skillhub_upsert_installed_usage \
+    "$source_name" \
+    "$skill_name" \
+    "$target" \
+    "$scope" \
+    "$project_path" \
+    "$target_root" \
+    "$installed_path" \
+    "$source_ref" \
+    "$source_location" \
+    "$source_catalog" \
+    "$content_hash" \
+    "$installed_at" \
+    "$updated_at"
 }
 
 skillhub_count_skill_dirs() {

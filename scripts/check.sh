@@ -7,7 +7,7 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 skillhub_validate_defaults_sources_file
 skillhub_validate_targets_file
 
-for script in install.sh bin/skillhub scripts/lib.sh scripts/sources.sh scripts/skills.sh scripts/installed.sh scripts/targets.sh scripts/check.sh; do
+for script in install.sh bin/skillhub scripts/lib.sh scripts/sources.sh scripts/skills.sh scripts/installed.sh scripts/targets.sh scripts/recommend.sh scripts/check.sh; do
   if [ ! -f "$repo_root/$script" ]; then
     printf 'Missing script: %s\n' "$script" >&2
     exit 1

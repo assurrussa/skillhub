@@ -36,10 +36,14 @@ type InstalledSkill struct {
 	Managed        string
 	Source         string
 	QualifiedSkill string
+	ProjectPath    string
+	TargetRoot     string
 	InstalledPath  string
 	ContentHash    string
 	InstalledAt    string
+	UpdatedAt      string
 	Path           string
+	RegistryOnly   bool
 }
 
 type Target struct {
@@ -75,17 +79,18 @@ type InstallTargetChoice struct {
 }
 
 const (
-	viewSkills        = "skills"
-	viewInstalled     = "installed"
-	viewSources       = "sources"
-	viewUpdate        = "update"
-	viewDefaults      = "defaults"
-	viewAddSource     = "add-source"
-	viewDetails       = "details"
-	viewTargets       = "targets"
-	viewInstallResult = "install-result"
-	viewConfirmDelete = "confirm-delete"
-	viewHelp          = "help"
+	viewSkills           = "skills"
+	viewInstalled        = "installed"
+	viewSources          = "sources"
+	viewUpdate           = "update"
+	viewDefaults         = "defaults"
+	viewAddSource        = "add-source"
+	viewDetails          = "details"
+	viewInstalledDetails = "installed-details"
+	viewTargets          = "targets"
+	viewInstallResult    = "install-result"
+	viewConfirmDelete    = "confirm-delete"
+	viewHelp             = "help"
 )
 
 type InstallResult struct {
@@ -101,6 +106,13 @@ type InstallTargetResult struct {
 	SkillPaths []string
 }
 
+type installedStats struct {
+	Installed int
+	Skills    int
+	Projects  int
+	Managed   int
+}
+
 type model struct {
 	repoRoot string
 
@@ -113,26 +125,29 @@ type model struct {
 	targets       []Target
 	targetStats   map[string]TargetDetection
 
-	cursor           int
-	installedCursor  int
-	defaultCursor    int
-	targetCursor     int
-	offset           int
-	installedOffset  int
-	targetOffset     int
-	width            int
-	height           int
-	search           string
-	sourceInput      string
-	searchMode       bool
-	loading          bool
-	busy             bool
-	noSources        bool
-	status           string
-	viewMode         string
-	previousViewMode string
-	reloadOnFinish   bool
-	postReloadStatus string
+	cursor                int
+	installedCursor       int
+	installedDetailCursor int
+	defaultCursor         int
+	targetCursor          int
+	offset                int
+	installedOffset       int
+	installedDetailOffset int
+	targetOffset          int
+	width                 int
+	height                int
+	search                string
+	sourceInput           string
+	searchMode            bool
+	loading               bool
+	busy                  bool
+	noSources             bool
+	status                string
+	viewMode              string
+	previousViewMode      string
+	installedDetailKey    string
+	reloadOnFinish        bool
+	postReloadStatus      string
 
 	installScope     string
 	projectDir       string
@@ -212,6 +227,9 @@ var (
 			Foreground(lipgloss.Color("230")).
 			Background(lipgloss.Color("24")).
 			Padding(0, 1)
+	projectBadgeStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("42")).
+				Bold(true)
 	statusStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("252"))
 	helpStyle = lipgloss.NewStyle().
@@ -461,6 +479,10 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if m.viewMode == viewDetails {
 		return m.updateDetailsKey(msg)
+	}
+
+	if m.viewMode == viewInstalledDetails {
+		return m.updateInstalledDetailsKey(msg)
 	}
 
 	if m.viewMode == viewInstallResult {
@@ -759,8 +781,70 @@ func (m model) updateInstalledKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.viewMode = viewConfirmDelete
 		m.status = "Confirm uninstall."
 		return m, nil
+	case "enter":
+		row, ok := m.currentInstalled()
+		if !ok {
+			m.status = "No installed skill selected."
+			return m, nil
+		}
+		m.installedDetailKey = installedSkillKey(row)
+		m.installedDetailCursor = m.indexInstalledDetailRow(row)
+		m.installedDetailOffset = 0
+		m.ensureInstalledDetailCursorVisible()
+		m.viewMode = viewInstalledDetails
+		m.status = "Viewing installed " + installedSkillLabel(row) + "."
+		return m, nil
 	case "r":
 		return m.reloadCurrentView("Reloading installed skills...")
+	default:
+		return m, nil
+	}
+}
+
+func (m model) updateInstalledDetailsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q":
+		return m, tea.Quit
+	case "esc", "b":
+		m.viewMode = viewInstalled
+		m.status = "Returned to installed skills."
+		return m, nil
+	case "up", "k":
+		if m.installedDetailCursor > 0 {
+			m.installedDetailCursor--
+			m.ensureInstalledDetailCursorVisible()
+		}
+		return m, nil
+	case "down", "j":
+		rows := m.installedDetailRows()
+		if m.installedDetailCursor < len(rows)-1 {
+			m.installedDetailCursor++
+			m.ensureInstalledDetailCursorVisible()
+		}
+		return m, nil
+	case "u":
+		row, ok := m.currentInstalledDetail()
+		if !ok {
+			m.status = "No installed location selected."
+			return m, nil
+		}
+		m.busy = true
+		m.status = fmt.Sprintf("Updating %s/%s managed skills...", row.Target, row.Scope)
+		return m, runInstalledCommand(m.repoRoot, "Update installed", installedUpdateArgsForRow(row, m.projectDir)...)
+	case "x":
+		row, ok := m.currentInstalledDetail()
+		if !ok {
+			m.status = "No installed location selected."
+			return m, nil
+		}
+		if row.Managed != "yes" {
+			m.status = "Unmanaged skills are read-only in TUI. Use CLI --force if needed."
+			return m, nil
+		}
+		m.pendingUninstall = row
+		m.viewMode = viewConfirmDelete
+		m.status = "Confirm uninstall."
+		return m, nil
 	default:
 		return m, nil
 	}
@@ -1036,6 +1120,9 @@ func (m model) renderBody(width int) string {
 	if m.viewMode == viewDetails {
 		return panel("Skill details", m.detailsContent(width-6), width)
 	}
+	if m.viewMode == viewInstalledDetails {
+		return panel("Installed skill details", m.installedDetailsContent(width-6), width)
+	}
 	if m.viewMode == viewInstallResult {
 		return panel("Install complete", m.installResultContent(width-6), width)
 	}
@@ -1201,12 +1288,20 @@ func (m model) targetsContent(width int) string {
 }
 
 func (m model) installedContent(width int) string {
-	legend := helpStyle.Render("[M] managed by Skillhub: update/uninstall   [ ] unmanaged: read-only in TUI")
+	legend := helpStyle.Render("[M] managed by Skillhub: update/uninstall   [ ] unmanaged: read-only in TUI   registry: recorded usage")
 	if len(m.installedRows) == 0 {
 		return legend + "\n\nNo installed skills found.\n\nInstall skills from 1 Skills, or run skillhub installed list in CLI."
 	}
 
 	var b strings.Builder
+	stats := installedOverviewStats(m.installedRows)
+	fmt.Fprintf(&b, "%s   %s   %s   %s\n",
+		badgeStyle.Render(fmt.Sprintf("Installed: %d", stats.Installed)),
+		badgeStyle.Render(fmt.Sprintf("Skills: %d", stats.Skills)),
+		badgeStyle.Render(fmt.Sprintf("Projects: %d", stats.Projects)),
+		badgeStyle.Render(fmt.Sprintf("Managed: %d", stats.Managed)),
+	)
+	fmt.Fprintln(&b)
 	fmt.Fprintln(&b, legend)
 	fmt.Fprintln(&b)
 	visible := m.installedVisibleCount()
@@ -1214,15 +1309,22 @@ func (m model) installedContent(width int) string {
 	if end > len(m.installedRows) {
 		end = len(m.installedRows)
 	}
-	previousGroup := ""
+	previousSection := ""
+	previousSubgroup := ""
 	for row, installed := range m.installedRows[m.installedOffset:end] {
-		group := targetScopeLabel(installed.Target, installed.Scope)
-		if group != previousGroup {
+		section := installedSection(installed)
+		subgroup := installedSubgroup(installed)
+		if section != previousSection {
 			if row != 0 {
 				fmt.Fprintln(&b)
 			}
-			fmt.Fprintln(&b, categoryStyle.Render(group))
-			previousGroup = group
+			fmt.Fprintln(&b, categoryStyle.Render(section))
+			previousSection = section
+			previousSubgroup = ""
+		}
+		if subgroup != "" && subgroup != previousSubgroup {
+			fmt.Fprintln(&b, treeStyle.Render("  "+subgroup))
+			previousSubgroup = subgroup
 		}
 
 		i := m.installedOffset + row
@@ -1236,19 +1338,97 @@ func (m model) installedContent(width int) string {
 			marker = checkedStyle.Render("[M]")
 			managedLabel = "managed"
 		}
-		title := fmt.Sprintf("%s %s %s", cursor, marker, installed.Skill)
+		indent := "  "
+		if subgroup != "" {
+			indent = "    "
+		}
+		title := fmt.Sprintf("%s%s %s %s    %s", indent, cursor, marker, installed.Skill, targetScopeLabel(installed.Target, installed.Scope))
 		if i == m.installedCursor {
 			title = activeRowStyle.Render(title)
 		}
 		if installed.Managed == "yes" {
 			title = selectedRowStyle.Render(title)
 		}
-		meta := fmt.Sprintf("    source: %s   %s", emptyLabel(installed.Source, "-"), managedLabel)
-		path := "    " + truncate(installed.Path, max(12, width-4))
+		metaParts := []string{managedLabel}
+		if installed.RegistryOnly {
+			metaParts = append(metaParts, "registry")
+		}
+		if strings.TrimSpace(installed.ProjectPath) != "" && installed.ProjectPath != "-" {
+			metaParts = append(metaParts, "project: "+truncate(installed.ProjectPath, max(12, width-30)))
+		}
+		meta := fmt.Sprintf("%ssource: %s   %s", indent, emptyLabel(installed.Source, "-"), strings.Join(metaParts, "   "))
+		path := indent + truncate(installed.Path, max(12, width-len(indent)))
 		fmt.Fprintln(&b, title)
 		fmt.Fprintln(&b, subtleStyle.Render(meta))
 		fmt.Fprintln(&b, subtleStyle.Render(path))
 		if row != end-m.installedOffset-1 {
+			fmt.Fprintln(&b)
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) installedDetailsContent(width int) string {
+	rows := m.installedDetailRows()
+	if len(rows) == 0 {
+		return "No installed locations found."
+	}
+
+	if m.installedDetailCursor >= len(rows) {
+		m.installedDetailCursor = len(rows) - 1
+	}
+	if m.installedDetailCursor < 0 {
+		m.installedDetailCursor = 0
+	}
+
+	var b strings.Builder
+	fmt.Fprintln(&b, titleStyle.Render(installedSkillLabel(rows[0])))
+	fmt.Fprintln(&b)
+	fmt.Fprintf(&b, "%s\n\n", badgeStyle.Render(fmt.Sprintf("Installed in: %d", len(rows))))
+
+	visible := m.installedDetailVisibleCount()
+	end := m.installedDetailOffset + visible
+	if end > len(rows) {
+		end = len(rows)
+	}
+	for rowIndex, row := range rows[m.installedDetailOffset:end] {
+		i := m.installedDetailOffset + rowIndex
+		cursor := " "
+		if i == m.installedDetailCursor {
+			cursor = "›"
+		}
+		marker := checkboxStyle.Render("[ ]")
+		if row.Managed == "yes" {
+			marker = checkedStyle.Render("[M]")
+		}
+		title := fmt.Sprintf("%s %s %s", cursor, marker, targetScopeLabel(row.Target, row.Scope))
+		if row.Scope == "project" && strings.TrimSpace(row.ProjectPath) != "" && row.ProjectPath != "-" {
+			title = fmt.Sprintf("%s %s %s %s", cursor, marker, projectBadgeStyle.Render("LOCAL PROJECT"), targetScopeLabel(row.Target, row.Scope))
+		}
+		if i == m.installedDetailCursor {
+			title = activeRowStyle.Render(title)
+		}
+		if row.Managed == "yes" {
+			title = selectedRowStyle.Render(title)
+		}
+		fmt.Fprintln(&b, title)
+		if strings.TrimSpace(row.ProjectPath) != "" && row.ProjectPath != "-" {
+			fmt.Fprintln(&b, "    "+projectBadgeStyle.Render("Project root: "+truncate(row.ProjectPath, max(12, width-18))))
+		}
+		fmt.Fprintln(&b, subtleStyle.Render("    path: "+truncate(row.Path, max(12, width-10))))
+		metaParts := []string{fmt.Sprintf("source: %s", emptyLabel(row.Source, "-"))}
+		if strings.TrimSpace(row.ContentHash) != "" && row.ContentHash != "-" {
+			metaParts = append(metaParts, "hash: "+row.ContentHash)
+		}
+		if strings.TrimSpace(row.InstalledAt) != "" && row.InstalledAt != "-" {
+			metaParts = append(metaParts, "installed: "+row.InstalledAt)
+		}
+		if strings.TrimSpace(row.UpdatedAt) != "" && row.UpdatedAt != "-" {
+			metaParts = append(metaParts, "updated: "+row.UpdatedAt)
+		}
+		meta := indent(wrapText(strings.Join(metaParts, "   "), max(12, width-4)), "    ")
+		fmt.Fprintln(&b, subtleStyle.Render(meta))
+		if rowIndex != end-m.installedDetailOffset-1 {
 			fmt.Fprintln(&b)
 		}
 	}
@@ -1408,6 +1588,9 @@ func (m model) helpText() string {
 	if m.viewMode == viewDetails {
 		return "space select  i targets  enter/esc back  q quit"
 	}
+	if m.viewMode == viewInstalledDetails {
+		return "j/k move location  u update  x uninstall  esc back  q quit"
+	}
 	if m.viewMode == viewInstallResult {
 		return "enter/b back  t targets  q quit"
 	}
@@ -1415,7 +1598,7 @@ func (m model) helpText() string {
 		return "enter/y confirm  esc/n cancel  q quit"
 	}
 	if m.viewMode == viewInstalled {
-		return "1-5/left-right sections  j/k move  u update target  x uninstall managed  r reload  ? help  q quit"
+		return "1-5/left-right sections  j/k move  enter details  u update target  x uninstall managed  r reload  ? help  q quit"
 	}
 	if m.viewMode == viewSources {
 		return "1-5/left-right sections  d presets  n custom  s sync  r reload  ? help  q quit"
@@ -1535,6 +1718,26 @@ func (m *model) ensureInstalledCursorVisible() {
 	}
 }
 
+func (m *model) ensureInstalledDetailCursorVisible() {
+	visible := m.installedDetailVisibleCount()
+	if m.installedDetailCursor < m.installedDetailOffset {
+		m.installedDetailOffset = m.installedDetailCursor
+	}
+	if m.installedDetailCursor >= m.installedDetailOffset+visible {
+		m.installedDetailOffset = m.installedDetailCursor - visible + 1
+	}
+	if m.installedDetailOffset < 0 {
+		m.installedDetailOffset = 0
+	}
+	maxOffset := len(m.installedDetailRows()) - visible
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if m.installedDetailOffset > maxOffset {
+		m.installedDetailOffset = maxOffset
+	}
+}
+
 func (m model) visibleCount() int {
 	if m.height <= 0 {
 		return 5
@@ -1551,6 +1754,17 @@ func (m model) installedVisibleCount() int {
 		return 6
 	}
 	count := (m.height - 14) / 4
+	if count < 1 {
+		return 1
+	}
+	return count
+}
+
+func (m model) installedDetailVisibleCount() int {
+	if m.height <= 0 {
+		return 4
+	}
+	count := (m.height - 16) / 5
 	if count < 1 {
 		return 1
 	}
@@ -1638,6 +1852,41 @@ func (m model) currentInstalled() (InstalledSkill, bool) {
 	return m.installedRows[m.installedCursor], true
 }
 
+func (m model) currentInstalledDetail() (InstalledSkill, bool) {
+	rows := m.installedDetailRows()
+	if len(rows) == 0 || m.installedDetailCursor < 0 || m.installedDetailCursor >= len(rows) {
+		return InstalledSkill{}, false
+	}
+	return rows[m.installedDetailCursor], true
+}
+
+func (m model) installedDetailRows() []InstalledSkill {
+	key := m.installedDetailKey
+	if strings.TrimSpace(key) == "" {
+		if row, ok := m.currentInstalled(); ok {
+			key = installedSkillKey(row)
+		}
+	}
+	rows := []InstalledSkill{}
+	for _, row := range m.installedRows {
+		if installedSkillKey(row) == key {
+			rows = append(rows, row)
+		}
+	}
+	sortInstalledRows(rows)
+	return rows
+}
+
+func (m model) indexInstalledDetailRow(wanted InstalledSkill) int {
+	key := installedRowKey(wanted)
+	for i, row := range m.installedDetailRows() {
+		if installedRowKey(row) == key {
+			return i
+		}
+	}
+	return 0
+}
+
 func (m model) sourceCount() int {
 	seen := map[string]bool{}
 	for _, skill := range m.skills {
@@ -1652,6 +1901,8 @@ func (m model) dashboardSection() string {
 	switch m.viewMode {
 	case viewDetails, viewInstallResult:
 		return viewSkills
+	case viewInstalledDetails:
+		return viewInstalled
 	case viewDefaults, viewAddSource:
 		return viewSources
 	case viewConfirmDelete:
@@ -1685,6 +1936,63 @@ func targetScopeLabel(target, scope string) string {
 		label = "OpenCode"
 	}
 	return strings.TrimSpace(label + " " + scope)
+}
+
+func installedOverviewStats(rows []InstalledSkill) installedStats {
+	stats := installedStats{Installed: len(rows)}
+	skills := map[string]bool{}
+	projects := map[string]bool{}
+	for _, row := range rows {
+		skills[installedSkillKey(row)] = true
+		if row.Managed == "yes" {
+			stats.Managed++
+		}
+		if row.Scope == "project" && strings.TrimSpace(row.ProjectPath) != "" && row.ProjectPath != "-" {
+			projects[row.ProjectPath] = true
+		}
+	}
+	stats.Skills = len(skills)
+	stats.Projects = len(projects)
+	return stats
+}
+
+func installedSkillKey(row InstalledSkill) string {
+	if row.Managed == "yes" && strings.TrimSpace(row.Source) != "" && row.Source != "-" {
+		return row.Source + "/" + row.Skill
+	}
+	return row.Skill
+}
+
+func installedSkillLabel(row InstalledSkill) string {
+	return installedSkillKey(row)
+}
+
+func installedSection(row InstalledSkill) string {
+	if row.Target == "directory" || row.Scope == "custom" {
+		return "Custom directories"
+	}
+	if row.Scope == "project" {
+		return "Projects"
+	}
+	return "Global"
+}
+
+func installedSubgroup(row InstalledSkill) string {
+	switch installedSection(row) {
+	case "Projects":
+		if strings.TrimSpace(row.ProjectPath) != "" && row.ProjectPath != "-" {
+			return "Project " + row.ProjectPath
+		}
+		return "project path not recorded"
+	case "Custom directories":
+		if strings.TrimSpace(row.TargetRoot) != "" && row.TargetRoot != "-" {
+			return row.TargetRoot
+		}
+		if strings.TrimSpace(row.Path) != "" && row.Path != "-" {
+			return filepath.Dir(row.Path)
+		}
+	}
+	return ""
 }
 
 func sectionTitle(section string) string {
@@ -2091,6 +2399,16 @@ func loadInstalled(repoRoot string) tea.Cmd {
 				rows = append(rows, parsed...)
 			}
 		}
+		usageOutput, err := runScript(repoRoot, "scripts/installed.sh", "usage", "--tsv")
+		if err != nil {
+			return installedLoadedMsg{err: commandError(err, usageOutput)}
+		}
+		usageRows, err := parseInstalledUsageTSV(usageOutput)
+		if err != nil {
+			return installedLoadedMsg{err: err}
+		}
+		rows = mergeInstalledUsageRows(rows, usageRows)
+		sortInstalledRows(rows)
 		return installedLoadedMsg{rows: rows}
 	}
 }
@@ -2120,9 +2438,16 @@ func installedUpdateArgsForRow(row InstalledSkill, projectDir string) []string {
 	if usesLegacyInstalledRow(row) {
 		return []string{"update"}
 	}
+	if row.Target == "directory" || row.Scope == "custom" {
+		dir := row.TargetRoot
+		if strings.TrimSpace(dir) == "" && strings.TrimSpace(row.Path) != "" {
+			dir = filepath.Dir(row.Path)
+		}
+		return []string{"update", "--target", "directory", "--dir", dir}
+	}
 	args := []string{"update", "--target", row.Target, "--scope", row.Scope}
 	if row.Scope == "project" {
-		args = append(args, "--project", projectDir)
+		args = append(args, "--project", installedRowProjectDir(row, projectDir))
 	}
 	return args
 }
@@ -2131,11 +2456,25 @@ func installedUninstallArgsForRow(row InstalledSkill, projectDir string) []strin
 	if usesLegacyInstalledRow(row) {
 		return []string{"uninstall", row.Skill}
 	}
+	if row.Target == "directory" || row.Scope == "custom" {
+		dir := row.TargetRoot
+		if strings.TrimSpace(dir) == "" && strings.TrimSpace(row.Path) != "" {
+			dir = filepath.Dir(row.Path)
+		}
+		return []string{"uninstall", row.Skill, "--target", "directory", "--dir", dir}
+	}
 	args := []string{"uninstall", row.Skill, "--target", row.Target, "--scope", row.Scope}
 	if row.Scope == "project" {
-		args = append(args, "--project", projectDir)
+		args = append(args, "--project", installedRowProjectDir(row, projectDir))
 	}
 	return args
+}
+
+func installedRowProjectDir(row InstalledSkill, fallback string) string {
+	if strings.TrimSpace(row.ProjectPath) != "" && row.ProjectPath != "-" {
+		return row.ProjectPath
+	}
+	return fallback
 }
 
 func installedListArgs(target, scope, projectDir string) []string {
@@ -2155,6 +2494,113 @@ func usesLegacyInstalledRow(row InstalledSkill) bool {
 		return false
 	}
 	return row.Path == root || strings.HasPrefix(row.Path, root+string(os.PathSeparator))
+}
+
+func mergeInstalledUsageRows(rows []InstalledSkill, usageRows []InstalledSkill) []InstalledSkill {
+	seen := map[string]bool{}
+	merged := append([]InstalledSkill(nil), rows...)
+	for i, row := range merged {
+		seen[installedRowKey(row)] = true
+		for _, usageRow := range usageRows {
+			if installedRowKey(row) != installedRowKey(usageRow) {
+				continue
+			}
+			merged[i].ProjectPath = usageRow.ProjectPath
+			merged[i].TargetRoot = usageRow.TargetRoot
+			merged[i].UpdatedAt = usageRow.UpdatedAt
+			merged[i].RegistryOnly = true
+			if strings.TrimSpace(merged[i].InstalledPath) == "" || merged[i].InstalledPath == "-" {
+				merged[i].InstalledPath = usageRow.InstalledPath
+			}
+			if strings.TrimSpace(merged[i].ContentHash) == "" || merged[i].ContentHash == "-" {
+				merged[i].ContentHash = usageRow.ContentHash
+			}
+			break
+		}
+	}
+	for _, row := range usageRows {
+		key := installedRowKey(row)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		merged = append(merged, row)
+	}
+	return merged
+}
+
+func installedRowKey(row InstalledSkill) string {
+	path := row.InstalledPath
+	if strings.TrimSpace(path) == "" || path == "-" {
+		path = row.Path
+	}
+	return row.Target + "\x00" + row.Scope + "\x00" + path
+}
+
+func sortInstalledRows(rows []InstalledSkill) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		left := rows[i]
+		right := rows[j]
+		if installedSectionRank(left) != installedSectionRank(right) {
+			return installedSectionRank(left) < installedSectionRank(right)
+		}
+		if installedSubgroup(left) != installedSubgroup(right) {
+			return installedSubgroup(left) < installedSubgroup(right)
+		}
+		if targetDisplayRank(left.Target) != targetDisplayRank(right.Target) {
+			return targetDisplayRank(left.Target) < targetDisplayRank(right.Target)
+		}
+		if scopeDisplayRank(left.Scope) != scopeDisplayRank(right.Scope) {
+			return scopeDisplayRank(left.Scope) < scopeDisplayRank(right.Scope)
+		}
+		if left.ProjectPath != right.ProjectPath {
+			return left.ProjectPath < right.ProjectPath
+		}
+		return left.Skill < right.Skill
+	})
+}
+
+func installedSectionRank(row InstalledSkill) int {
+	switch installedSection(row) {
+	case "Global":
+		return 0
+	case "Projects":
+		return 1
+	case "Custom directories":
+		return 2
+	default:
+		return 10
+	}
+}
+
+func targetDisplayRank(target string) int {
+	switch target {
+	case "codex":
+		return 0
+	case "directory":
+		return 1
+	case "claude":
+		return 2
+	case "gemini":
+		return 3
+	case "opencode":
+		return 4
+	default:
+		return 20
+	}
+}
+
+func scopeDisplayRank(scope string) int {
+	switch scope {
+	case "global":
+		return 0
+	case "project":
+		return 1
+	case "custom":
+		return 2
+	default:
+		return 10
+	}
 }
 
 func runInstallTargetsCommand(repoRoot string, choices []InstallTargetChoice, projectDir string, names []string) tea.Cmd {
@@ -2325,6 +2771,40 @@ func parseInstalledTSV(input string) ([]InstalledSkill, error) {
 			ContentHash:    parts[7],
 			InstalledAt:    parts[8],
 			Path:           parts[9],
+		})
+	}
+	return rows, nil
+}
+
+func parseInstalledUsageTSV(input string) ([]InstalledSkill, error) {
+	lines := strings.Split(strings.TrimSpace(input), "\n")
+	if len(lines) == 0 || lines[0] != "source\tskill\ttarget\tscope\tproject_path\ttarget_root\tinstalled_path\tsource_ref\tsource_location\tcatalog\tcontent_hash\tinstalled_at\tupdated_at" {
+		return nil, fmt.Errorf("unexpected installed usage TSV header")
+	}
+	rows := make([]InstalledSkill, 0, len(lines)-1)
+	for _, line := range lines[1:] {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 13)
+		if len(parts) != 13 {
+			return nil, fmt.Errorf("invalid installed usage TSV row: %q", line)
+		}
+		rows = append(rows, InstalledSkill{
+			Target:         parts[2],
+			Scope:          parts[3],
+			Skill:          parts[1],
+			Managed:        "yes",
+			Source:         parts[0],
+			QualifiedSkill: parts[0] + "/" + parts[1],
+			ProjectPath:    parts[4],
+			TargetRoot:     parts[5],
+			InstalledPath:  parts[6],
+			ContentHash:    parts[10],
+			InstalledAt:    parts[11],
+			UpdatedAt:      parts[12],
+			Path:           parts[6],
+			RegistryOnly:   true,
 		})
 	}
 	return rows, nil

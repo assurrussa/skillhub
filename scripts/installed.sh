@@ -9,7 +9,9 @@ usage() {
     'Usage:' \
     '  sh scripts/installed.sh list [--target <target>] [--scope global|project] [--project <path>] [--dir <path>] [--tsv]' \
     '  sh scripts/installed.sh update [--target <target>] [--scope global|project] [--project <path>] [--dir <path>] [-v|--verbose]' \
-    '  sh scripts/installed.sh uninstall <skill> [--target <target>] [--scope global|project] [--project <path>] [--dir <path>] [--force]'
+    '  sh scripts/installed.sh uninstall <skill> [--target <target>] [--scope global|project] [--project <path>] [--dir <path>] [--force]' \
+    '  sh scripts/installed.sh usage [[<source>/]<skill>] [--tsv]' \
+    '  sh scripts/installed.sh usage update --projects [[<source>/]<skill>...] [-v|--verbose]'
 }
 
 update_sources_file=""
@@ -47,6 +49,43 @@ is_valid_installed_skill_name() {
       return 0
       ;;
   esac
+}
+
+validate_usage_filter() {
+  filter="$1"
+  case "$filter" in
+    */*)
+      source_name=${filter%%/*}
+      skill_name=${filter#*/}
+      if ! skillhub_is_valid_source_name "$source_name" || ! is_valid_installed_skill_name "$skill_name"; then
+        printf 'Invalid usage filter: %s\n' "$filter" >&2
+        exit 1
+      fi
+      ;;
+    *)
+      if ! is_valid_installed_skill_name "$filter"; then
+        printf 'Invalid usage filter: %s\n' "$filter" >&2
+        exit 1
+      fi
+      ;;
+  esac
+}
+
+usage_filter_list_matches() {
+  source_name="$1"
+  skill_name="$2"
+  filters="$3"
+
+  if [ -z "$filters" ]; then
+    return 0
+  fi
+
+  for filter in $filters; do
+    if skillhub_usage_filter_matches "$filter" "$source_name" "$skill_name"; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 update_sources_path() {
@@ -162,6 +201,7 @@ update_managed_skill() {
   target="$3"
   scope="$4"
   verbose="$5"
+  project_path="${6:-}"
   skill_basename=$(basename -- "$skill_dir")
   metadata_file="$skill_dir/.skillhub.json"
 
@@ -169,6 +209,16 @@ update_managed_skill() {
 
   source_name=$(skillhub_metadata_value "$metadata_file" source)
   skill_name=$(skillhub_metadata_value "$metadata_file" skill)
+  installed_at=$(skillhub_metadata_value "$metadata_file" installed_at)
+  if [ "$installed_at" = "-" ]; then
+    installed_at=""
+  fi
+  if [ -z "$project_path" ]; then
+    project_path=$(skillhub_metadata_value "$metadata_file" project_path)
+    if [ "$project_path" = "-" ]; then
+      project_path="-"
+    fi
+  fi
   if [ "$skill_name" = "-" ]; then
     skill_name="$skill_basename"
   fi
@@ -229,6 +279,20 @@ update_managed_skill() {
   new_hash=$(skillhub_hash_skill_dir "$tmp_dir")
   if [ "$old_hash" != "-" ] && [ "$new_hash" != "-" ] && [ "$old_hash" = "$new_hash" ]; then
     rm -rf "$tmp_dir"
+    skillhub_write_install_metadata \
+      "$skill_dir" \
+      "$source_name" \
+      "$skill_name" \
+      "$source_name/$skill_name" \
+      "$target" \
+      "$scope" \
+      "$target_root" \
+      "$source_ref" \
+      "$source_location" \
+      "$source_catalog" \
+      "$old_hash" \
+      "$project_path" \
+      "$installed_at"
     if [ "$verbose" -eq 1 ]; then
       printf 'Unchanged %s/%s %s (%s)\n' "$target" "$scope" "$skill_name" "$old_hash"
     fi
@@ -263,7 +327,9 @@ update_managed_skill() {
     "$source_ref" \
     "$source_location" \
     "$source_catalog" \
-    "$content_hash"
+    "$content_hash" \
+    "$project_path" \
+    "$installed_at"
 
   if [ "$verbose" -eq 1 ]; then
     printf 'Updated %s/%s %s %s -> %s\n' "$target" "$scope" "$skill_name" "$old_hash" "$content_hash"
@@ -283,7 +349,8 @@ update_target_root() {
   target="$2"
   scope="$3"
   verbose="$4"
-  print_empty="$5"
+  project_path="$5"
+  print_empty="$6"
 
   managed_count=0
   target_updated=0
@@ -297,7 +364,7 @@ update_target_root() {
       [ -f "$skill_dir/SKILL.md" ] || continue
       [ -f "$skill_dir/.skillhub.json" ] || continue
       managed_count=$((managed_count + 1))
-      update_managed_skill "$skill_dir" "$target_root" "$target" "$scope" "$verbose"
+      update_managed_skill "$skill_dir" "$target_root" "$target" "$scope" "$verbose" "$project_path"
       case "$update_result" in
         updated)
           target_updated=$((target_updated + 1))
@@ -336,11 +403,13 @@ update_all_supported_targets() {
   project="$1"
   verbose="$2"
   touched=0
+  resolved_project=$(skillhub_project_dir "$project")
 
   update_supported_root() {
     root_target="$1"
     root_scope="$2"
     root_path="$3"
+    root_project_path="$4"
 
     if [ "$(skillhub_count_managed_skill_dirs "$root_path")" -eq 0 ]; then
       if [ "$verbose" -eq 1 ]; then
@@ -349,7 +418,7 @@ update_all_supported_targets() {
       return 0
     fi
     touched=1
-    update_target_root "$root_path" "$root_target" "$root_scope" "$verbose" 0
+    update_target_root "$root_path" "$root_target" "$root_scope" "$verbose" "$root_project_path" 0
   }
 
   while IFS='	' read -r id label status adapter description extra; do
@@ -363,12 +432,16 @@ update_all_supported_targets() {
 
     for candidate_scope in global project; do
       canonical_root=$(skillhub_target_root "$id" "$candidate_scope" "$project" "" 0 1)
-
-      if [ "$id" = "codex" ] && [ "$candidate_scope" = "global" ] && [ -n "${AGENT_SKILLS_DIR:-}" ] && [ "$AGENT_SKILLS_DIR" != "$canonical_root" ]; then
-        update_supported_root "$id" "$candidate_scope" "$AGENT_SKILLS_DIR"
+      candidate_project_path="-"
+      if [ "$candidate_scope" = "project" ]; then
+        candidate_project_path="$resolved_project"
       fi
 
-      update_supported_root "$id" "$candidate_scope" "$canonical_root"
+      if [ "$id" = "codex" ] && [ "$candidate_scope" = "global" ] && [ -n "${AGENT_SKILLS_DIR:-}" ] && [ "$AGENT_SKILLS_DIR" != "$canonical_root" ]; then
+        update_supported_root "$id" "$candidate_scope" "$AGENT_SKILLS_DIR" "-"
+      fi
+
+      update_supported_root "$id" "$candidate_scope" "$canonical_root" "$candidate_project_path"
     done
   done < "$(skillhub_targets_file)"
 
@@ -469,9 +542,168 @@ update_installed() {
   if [ "$target" = "directory" ]; then
     metadata_scope="custom"
   fi
+  project_path="-"
+  if [ "$metadata_scope" = "project" ]; then
+    project_path=$(skillhub_project_dir "$project")
+  fi
 
-  update_target_root "$target_root" "$target" "$metadata_scope" "$verbose" 1
+  update_target_root "$target_root" "$target" "$metadata_scope" "$verbose" "$project_path" 1
   printf 'Updated: %s, unchanged: %s, skipped: %s, failed: %s\n' \
+    "$updated_total" "$unchanged_total" "$skipped_total" "$failed_total"
+
+  if [ "$failed_total" -gt 0 ]; then
+    exit 1
+  fi
+}
+
+usage_lookup() {
+  shift
+
+  if [ "${1:-}" = "update" ]; then
+    shift
+    usage_update_projects "$@"
+    return
+  fi
+
+  filter=""
+  format="table"
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --tsv)
+        format="tsv"
+        shift
+        ;;
+      -h|--help|help)
+        usage
+        exit 0
+        ;;
+      -*)
+        usage >&2
+        exit 1
+        ;;
+      *)
+        if [ -n "$filter" ]; then
+          usage >&2
+          exit 1
+        fi
+        validate_usage_filter "$1"
+        filter="$1"
+        shift
+        ;;
+    esac
+  done
+
+  tmp_file=$(mktemp "${TMPDIR:-/tmp}/skillhub-usage.XXXXXX")
+  skillhub_emit_installed_usage_tsv "$filter" > "$tmp_file"
+
+  if [ "$format" = "tsv" ]; then
+    cat "$tmp_file"
+    rm -f "$tmp_file"
+    return
+  fi
+
+  printf '%-20s %-28s %-10s %-8s %-32s %s\n' "source" "skill" "target" "scope" "project" "installed_path"
+  printf '%-20s %-28s %-10s %-8s %-32s %s\n' "--------------------" "----------------------------" "----------" "--------" "--------------------------------" "--------------"
+  awk -F '	' 'NR > 1 {
+    printf "%-20s %-28s %-10s %-8s %-32s %s\n", $1, $2, $3, $4, $5, $7
+    count++
+  }
+  END {
+    if (count == 0) {
+      print "No managed skill usage recorded."
+    }
+  }' "$tmp_file"
+  rm -f "$tmp_file"
+}
+
+usage_update_projects() {
+  projects=0
+  verbose=0
+  filters=""
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --projects)
+        projects=1
+        shift
+        ;;
+      -v|--verbose)
+        verbose=1
+        shift
+        ;;
+      -h|--help|help)
+        usage
+        exit 0
+        ;;
+      -*)
+        usage >&2
+        exit 1
+        ;;
+      *)
+        validate_usage_filter "$1"
+        filters="${filters}${filters:+ }$1"
+        shift
+        ;;
+    esac
+  done
+
+  if [ "$projects" -ne 1 ]; then
+    printf '%s\n' 'usage update currently requires --projects.' >&2
+    exit 1
+  fi
+
+  registry_file=$(skillhub_installed_registry_file)
+  if [ ! -f "$registry_file" ]; then
+    printf 'No managed project-scope skill usage recorded.\n'
+    return
+  fi
+  skillhub_validate_installed_registry_file
+
+  project_usage_count=0
+  while IFS='	' read -r source_name skill_name target scope project_path target_root installed_path source_ref source_location source_catalog content_hash installed_at updated_at extra; do
+    case "$source_name" in
+      ''|'#'*|'source')
+        continue
+        ;;
+    esac
+
+    if [ "$scope" != "project" ]; then
+      continue
+    fi
+    if ! usage_filter_list_matches "$source_name" "$skill_name" "$filters"; then
+      continue
+    fi
+
+    project_usage_count=$((project_usage_count + 1))
+    if [ ! -d "$installed_path" ] || [ ! -f "$installed_path/SKILL.md" ] || [ ! -f "$installed_path/.skillhub.json" ]; then
+      printf 'Skipped %s/project %s: managed install missing at %s\n' "$target" "$skill_name" "$installed_path"
+      skipped_total=$((skipped_total + 1))
+      continue
+    fi
+
+    update_managed_skill "$installed_path" "$target_root" "$target" "$scope" "$verbose" "$project_path"
+    case "$update_result" in
+      updated)
+        updated_total=$((updated_total + 1))
+        ;;
+      unchanged)
+        unchanged_total=$((unchanged_total + 1))
+        ;;
+      failed)
+        failed_total=$((failed_total + 1))
+        ;;
+      *)
+        skipped_total=$((skipped_total + 1))
+        ;;
+    esac
+  done < "$registry_file"
+
+  if [ "$project_usage_count" -eq 0 ]; then
+    printf 'No managed project-scope skill usage matched registry filters.\n'
+  fi
+
+  printf 'Updated project usage: updated=%s unchanged=%s skipped=%s failed=%s\n' \
     "$updated_total" "$unchanged_total" "$skipped_total" "$failed_total"
 
   if [ "$failed_total" -gt 0 ]; then
@@ -572,6 +804,7 @@ uninstall_installed() {
   fi
 
   rm -rf "$skill_dir"
+  skillhub_remove_installed_usage_by_path "$skill_dir"
   printf 'Uninstalled %s from %s\n' "$skill_name" "$target_root"
 }
 
@@ -585,6 +818,9 @@ case "$cmd" in
     ;;
   uninstall)
     uninstall_installed "$@"
+    ;;
+  usage)
+    usage_lookup "$@"
     ;;
   -h|--help|help)
     usage

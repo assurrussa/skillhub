@@ -29,10 +29,13 @@ usage() {
     '  skillhub installed list' \
     '  skillhub installed update' \
     '  skillhub installed uninstall <skill>' \
+    '  skillhub installed usage [[<source>/]<skill>] [--tsv]' \
+    '  skillhub installed usage update --projects [[<source>/]<skill>...] [-v|--verbose]' \
     '  skillhub skills list' \
     '  skillhub skills search <query>' \
     '  skillhub skills install [--target <target>] [--scope global|project] [<source>/]<skill-name>...' \
     '  skillhub skills install --all' \
+    '  skillhub recommend [--project <path>] [--tsv]' \
     '  skillhub tui' \
     '  skillhub update [--cascade] [-v|--verbose]' \
     '  skillhub version' \
@@ -64,6 +67,10 @@ case "$cmd" in
     ;;
   list|search|install)
     exec sh "$repo_root/scripts/skills.sh" "$@"
+    ;;
+  recommend)
+    shift
+    exec sh "$repo_root/scripts/recommend.sh" "$@"
     ;;
   tui)
     printf 'skillhub tui requires Go. Install Go or run sh install.sh from the skillhub checkout.\n' >&2

@@ -137,6 +137,7 @@ install_skill() {
   target_root="$2"
   target="$3"
   scope="$4"
+  project_path="$5"
   wanted_source=""
   wanted_skill=$(skill_install_name "$wanted")
   case "$wanted" in
@@ -222,7 +223,8 @@ install_skill() {
     "$match_ref" \
     "$match_location" \
     "$match_catalog" \
-    "$content_hash"
+    "$content_hash" \
+    "$project_path"
   printf 'Installed %s from %s to %s\n' "$wanted_skill" "$match_source" "$target_root/$wanted_skill"
 }
 
@@ -230,6 +232,7 @@ install_all() {
   target_root="$1"
   target="$2"
   scope="$3"
+  project_path="$4"
 
   seen_install_names=""
   source_count=0
@@ -281,7 +284,7 @@ install_all() {
           continue
           ;;
       esac
-      install_skill "$source_name/$skill_name" "$target_root" "$target" "$scope"
+      install_skill "$source_name/$skill_name" "$target_root" "$target" "$scope" "$project_path"
     done < "$catalog_file"
   done < "$sources_file"
 }
@@ -367,8 +370,12 @@ install_requested() {
   if [ "$target" = "directory" ]; then
     metadata_scope="custom"
   fi
+  project_path="-"
+  if [ "$metadata_scope" = "project" ]; then
+    project_path=$(skillhub_project_dir "$project")
+  fi
   if [ "$all" -eq 1 ]; then
-    install_all "$target_root" "$target" "$metadata_scope"
+    install_all "$target_root" "$target" "$metadata_scope" "$project_path"
     return
   fi
 
@@ -385,7 +392,7 @@ install_requested() {
   done
 
   for skill_name in $skill_names; do
-    install_skill "$skill_name" "$target_root" "$target" "$metadata_scope"
+    install_skill "$skill_name" "$target_root" "$target" "$metadata_scope" "$project_path"
   done
 }
 

@@ -54,6 +54,7 @@ func NewRootCommand() *cobra.Command {
 	installed.AddCommand(installedListCommand())
 	installed.AddCommand(installedUpdateCommand())
 	installed.AddCommand(installedUninstallCommand())
+	installed.AddCommand(installedUsageCommand())
 
 	skills := &cobra.Command{
 		Use:   "skills",
@@ -67,6 +68,7 @@ func NewRootCommand() *cobra.Command {
 	root.AddCommand(scriptCommand("list", "List available skills", "scripts/skills.sh", []string{"list"}, cobra.NoArgs))
 	root.AddCommand(scriptCommand("search <query>", "Search available skills", "scripts/skills.sh", []string{"search"}, cobra.MinimumNArgs(1)))
 	root.AddCommand(installCommand("install [<source>/]<skill-name>...", "Install selected skills"))
+	root.AddCommand(recommendCommand())
 	root.AddCommand(versionCommand())
 	root.AddCommand(updateCommand())
 	root.AddCommand(&cobra.Command{
@@ -343,6 +345,85 @@ func installedUninstallCommand() *cobra.Command {
 	return cmd
 }
 
+func installedUsageCommand() *cobra.Command {
+	var tsv bool
+	cmd := &cobra.Command{
+		Use:   "usage [[<source>/]<skill>]",
+		Short: "Show where managed skills are used",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repoRoot, err := resolveRepoRoot()
+			if err != nil {
+				return err
+			}
+			scriptArgs := []string{"usage"}
+			scriptArgs = append(scriptArgs, args...)
+			if tsv {
+				scriptArgs = append(scriptArgs, "--tsv")
+			}
+			return runScript(repoRoot, "scripts/installed.sh", scriptArgs...)
+		},
+	}
+	cmd.Flags().BoolVar(&tsv, "tsv", false, "print tab-separated output")
+	cmd.AddCommand(installedUsageUpdateCommand())
+	return cmd
+}
+
+func installedUsageUpdateCommand() *cobra.Command {
+	var projects bool
+	var verbose bool
+	cmd := &cobra.Command{
+		Use:   "update [[<source>/]<skill>...]",
+		Short: "Update managed project-scope skills recorded in usage registry",
+		Args:  cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repoRoot, err := resolveRepoRoot()
+			if err != nil {
+				return err
+			}
+			scriptArgs := []string{"usage", "update"}
+			if projects {
+				scriptArgs = append(scriptArgs, "--projects")
+			}
+			scriptArgs = append(scriptArgs, args...)
+			if verbose {
+				scriptArgs = append(scriptArgs, "--verbose")
+			}
+			return runScript(repoRoot, "scripts/installed.sh", scriptArgs...)
+		},
+	}
+	cmd.Flags().BoolVar(&projects, "projects", false, "update project-scope installs recorded in usage registry")
+	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "print per-skill update details")
+	return cmd
+}
+
+func recommendCommand() *cobra.Command {
+	var project string
+	var tsv bool
+	cmd := &cobra.Command{
+		Use:   "recommend",
+		Short: "Recommend a minimal skill set for a project",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repoRoot, err := resolveRepoRoot()
+			if err != nil {
+				return err
+			}
+			scriptArgs := []string{}
+			if cmd.Flags().Changed("project") {
+				scriptArgs = append(scriptArgs, "--project", project)
+			}
+			if tsv {
+				scriptArgs = append(scriptArgs, "--tsv")
+			}
+			return runScript(repoRoot, "scripts/recommend.sh", scriptArgs...)
+		},
+	}
+	cmd.Flags().StringVar(&project, "project", "", "project directory to analyze; defaults to caller working directory")
+	cmd.Flags().BoolVar(&tsv, "tsv", false, "print tab-separated output")
+	return cmd
+}
+
 func scriptCommand(use, short, script string, prefix []string, args cobra.PositionalArgs) *cobra.Command {
 	return &cobra.Command{
 		Use:   use,
@@ -477,6 +558,7 @@ func hasRepoFiles(dir string) bool {
 		filepath.Join("scripts", "sources.sh"),
 		filepath.Join("scripts", "installed.sh"),
 		filepath.Join("scripts", "targets.sh"),
+		filepath.Join("scripts", "recommend.sh"),
 	}
 	for _, rel := range required {
 		if _, err := os.Stat(filepath.Join(dir, rel)); err != nil {

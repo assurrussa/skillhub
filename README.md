@@ -5,6 +5,15 @@ sources. Sources define where skills come from; targets define where skills are
 installed. The Go/Cobra command owns the user-facing interface; the POSIX shell
 scripts remain the portable backend used by the CLI and TUI.
 
+## Why Skillhub
+
+- Find skills from configured sources, search the catalog, and install selected
+  skills into supported agents and scopes without manually copying files.
+- Keep Skillhub-managed skills updateable, including project-local installs.
+  When a skill is installed through Skillhub from a source, metadata and usage
+  registry entries let Skillhub update that exact global, local project, or
+  custom-directory install later.
+
 ## Install
 
 Install the `skillhub` command. Go and Git are required because the installer
@@ -103,6 +112,14 @@ skillhub installed update --target claude --scope project --project /path/to/pro
 skillhub installed update --target directory --dir /tmp/skills -v
 skillhub installed uninstall rules-selector
 skillhub installed uninstall rules-selector --target directory --dir /tmp/skills
+skillhub installed usage
+skillhub installed usage rules-selector
+skillhub installed usage agent-rules/go-project-rules --tsv
+skillhub installed usage update --projects
+skillhub installed usage update --projects rules-selector -v
+skillhub recommend
+skillhub recommend --project /path/to/project
+skillhub recommend --project /path/to/project --tsv
 skillhub skills list
 skillhub skills search go
 skillhub skills install rules-selector
@@ -242,6 +259,17 @@ Successful installs write metadata to the installed skill directory:
 <target-root>/<skill-name>/.skillhub.json
 ```
 
+Managed install usage is also recorded in user config:
+
+```text
+${XDG_CONFIG_HOME:-$HOME/.config}/skillhub/installed.tsv
+```
+
+The registry tracks Skillhub-managed installs created or updated by this
+version. Project-scope rows include the resolved project path; global and
+custom directory rows use `project_path=-`. It is not an import index for old
+manual installs.
+
 Inspect installed skills without modifying them:
 
 ```sh
@@ -250,18 +278,45 @@ skillhub installed list --target claude --scope project --project /path/to/proje
 skillhub installed list --target directory --dir /tmp/skills --tsv
 ```
 
+Look up managed usage across targets and projects:
+
+```sh
+skillhub installed usage
+skillhub installed usage rules-selector
+skillhub installed usage agent-rules/go-project-rules --tsv
+```
+
 Update managed installed skills:
 
 ```sh
 skillhub installed update
 skillhub installed update --target claude --scope project --project /path/to/project
 skillhub installed update --target directory --dir /tmp/skills -v
+skillhub installed usage update --projects
+skillhub installed usage update --projects rules-selector -v
 ```
 
 `installed update` syncs the source recorded in `.skillhub.json`, compares the
 installed skill hash with the current source skill, and rewrites only changed
 managed skills. If the source or catalog entry is missing, the skill is skipped
 and left installed.
+
+`installed usage update --projects` updates only project-scope installs recorded
+in `installed.tsv`. Global installs remain covered by `installed update` and
+`skillhub update --cascade`.
+
+Recommend a minimal project skill set without installing anything:
+
+```sh
+skillhub recommend
+skillhub recommend --project /path/to/project
+skillhub recommend --project /path/to/project --tsv
+```
+
+Recommendations are based on active source catalogs and project signals such as
+`AGENTS.md`, README/docs, Go workspaces, package manifests, and public
+OpenAPI/protobuf contracts. With no active sources, the command prints the same
+onboarding message as `skills list`.
 
 Uninstall managed skills:
 

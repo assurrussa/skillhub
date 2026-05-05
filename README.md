@@ -29,16 +29,22 @@ sh install.sh
 ```
 
 By default the installer keeps the source checkout in
-`~/.local/share/skillhub` for curl installs and writes the command to
-`~/.local/bin/skillhub`. Override locations:
+`~/.local/share/skillhub` for curl installs. For the command itself it first
+uses a writable PATH directory from `/opt/homebrew/bin` or `/usr/local/bin`;
+when neither can be used safely, it falls back to `~/.local/bin/skillhub`.
+Override locations:
 
 ```sh
 sh install.sh --bin-dir /tmp/bin
+sh install.sh --global
 SKILLHUB_BIN_DIR=/tmp/bin sh install.sh
+SKILLHUB_GLOBAL_BIN_DIRS=/opt/homebrew/bin:/usr/local/bin sh install.sh
 SKILLHUB_HOME=/tmp/skillhub-home sh install.sh
 ```
 
-If the install directory is not in `PATH`, the installer prints a note.
+If the install directory is not in `PATH`, the installer prints ready-to-run
+commands for the current shell and `~/.zshrc`. Use `--global` to install into a
+PATH directory such as `/usr/local/bin`; that directory must be writable.
 
 You can also run it directly from a checkout:
 
@@ -91,6 +97,8 @@ skillhub targets detect
 skillhub targets detect --tsv --project /path/to/project
 skillhub installed list
 skillhub installed list --target claude --scope project --project /path/to/project
+skillhub installed uninstall rules-selector
+skillhub installed uninstall rules-selector --target directory --dir /tmp/skills
 skillhub skills list
 skillhub skills search go
 skillhub skills install rules-selector
@@ -213,6 +221,18 @@ skillhub installed list
 skillhub installed list --target claude --scope project --project /path/to/project
 skillhub installed list --target directory --dir /tmp/skills --tsv
 ```
+
+Uninstall managed skills:
+
+```sh
+skillhub installed uninstall rules-selector
+skillhub installed uninstall rules-selector --target claude --scope project --project /path/to/project
+skillhub installed uninstall rules-selector --target directory --dir /tmp/skills
+```
+
+By default uninstall removes only Skillhub-managed directories that contain
+`.skillhub.json`. Use `--force` only when intentionally removing an unmanaged
+skill directory that still contains `SKILL.md`.
 
 `targets detect` reports whether each supported target path exists, how many
 `SKILL.md` directories it contains, and how many of those are managed by

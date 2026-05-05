@@ -26,6 +26,8 @@ usage() {
     '  skillhub sources remove <name>' \
     '  skillhub targets list' \
     '  skillhub targets detect' \
+    '  skillhub installed list' \
+    '  skillhub installed uninstall <skill>' \
     '  skillhub skills list' \
     '  skillhub skills search <query>' \
     '  skillhub skills install [--target <target>] [--scope global|project] [<source>/]<skill-name>...' \
@@ -50,6 +52,10 @@ case "$cmd" in
   targets)
     shift
     exec sh "$repo_root/scripts/targets.sh" "$@"
+    ;;
+  installed)
+    shift
+    exec sh "$repo_root/scripts/installed.sh" "$@"
     ;;
   skills)
     shift

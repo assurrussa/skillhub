@@ -55,6 +55,9 @@ smoke-temp:
 	SKILLHUB_CONFIG_DIR="$$tmp/config" \
 	$(SKILLHUB) installed list --target directory --dir "$$tmp/skills"; \
 	SKILLHUB_CONFIG_DIR="$$tmp/config" \
+	$(SKILLHUB) installed uninstall rules-selector --target directory --dir "$$tmp/skills"; \
+	test ! -e "$$tmp/skills/rules-selector"; \
+	SKILLHUB_CONFIG_DIR="$$tmp/config" \
 	$(SKILLHUB) targets detect --project "$$project"
 
 tui-temp:
@@ -69,4 +72,3 @@ tui-temp:
 	SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" \
 	AGENT_SKILLS_DIR="$$tmp/skills" \
 	$(SKILLHUB) tui
-

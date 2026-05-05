@@ -52,6 +52,7 @@ func NewRootCommand() *cobra.Command {
 		Short: "Inspect installed skills",
 	}
 	installed.AddCommand(installedListCommand())
+	installed.AddCommand(installedUninstallCommand())
 
 	skills := &cobra.Command{
 		Use:   "skills",
@@ -232,6 +233,48 @@ func installedListCommand() *cobra.Command {
 	cmd.Flags().StringVar(&project, "project", "", "project directory for project-scope installs")
 	cmd.Flags().StringVar(&dir, "dir", "", "explicit directory for --target directory")
 	cmd.Flags().BoolVar(&tsv, "tsv", false, "print tab-separated output")
+	return cmd
+}
+
+func installedUninstallCommand() *cobra.Command {
+	var target string
+	var scope string
+	var project string
+	var dir string
+	var force bool
+	cmd := &cobra.Command{
+		Use:   "uninstall <skill>",
+		Short: "Uninstall an installed skill from a target",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repoRoot, err := resolveRepoRoot()
+			if err != nil {
+				return err
+			}
+			scriptArgs := []string{"uninstall", args[0]}
+			if cmd.Flags().Changed("target") {
+				scriptArgs = append(scriptArgs, "--target", target)
+			}
+			if cmd.Flags().Changed("scope") {
+				scriptArgs = append(scriptArgs, "--scope", scope)
+			}
+			if cmd.Flags().Changed("project") {
+				scriptArgs = append(scriptArgs, "--project", project)
+			}
+			if cmd.Flags().Changed("dir") {
+				scriptArgs = append(scriptArgs, "--dir", dir)
+			}
+			if force {
+				scriptArgs = append(scriptArgs, "--force")
+			}
+			return runScript(repoRoot, "scripts/installed.sh", scriptArgs...)
+		},
+	}
+	cmd.Flags().StringVar(&target, "target", "", "install target id; defaults to codex")
+	cmd.Flags().StringVar(&scope, "scope", "", "install scope for scoped targets: global or project")
+	cmd.Flags().StringVar(&project, "project", "", "project directory for project-scope installs")
+	cmd.Flags().StringVar(&dir, "dir", "", "explicit directory for --target directory")
+	cmd.Flags().BoolVar(&force, "force", false, "remove an unmanaged skill directory")
 	return cmd
 }
 

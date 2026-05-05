@@ -7,21 +7,34 @@ default_ref="main"
 usage() {
   printf '%s\n' \
     'Usage:' \
-    '  sh install.sh [--bin-dir <dir>] [--update]' \
+    '  sh install.sh [--bin-dir <dir>] [--global] [--update]' \
     '' \
     'Environment:' \
     '  SKILLHUB_BIN_DIR   Install directory for the skillhub command.' \
-    '                     Defaults to $HOME/.local/bin.' \
+    '                     Defaults to a writable PATH dir, then $HOME/.local/bin.' \
+    '  SKILLHUB_GLOBAL_BIN_DIRS' \
+    '                     Colon-separated global PATH candidates.' \
+    '                     Defaults to /opt/homebrew/bin:/usr/local/bin.' \
     '  SKILLHUB_HOME      Checkout/cache directory for curl installs.' \
     '                     Defaults to $HOME/.local/share/skillhub.' \
     '  SKILLHUB_REPO_URL  Git repository URL for curl installs.' \
     '                     Defaults to https://github.com/assurrussa/skillhub.git.' \
     '  SKILLHUB_REF       Git branch/tag/ref for curl installs.' \
-    '                     Defaults to main.'
+    '                     Defaults to main.' \
+    '' \
+    'Notes:' \
+    '  --global installs the command into a PATH directory such as /usr/local/bin.'
 }
 
 bin_dir="${SKILLHUB_BIN_DIR:-}"
+bin_dir_explicit=0
 update=0
+global_install=0
+auto_global_selected=0
+
+if [ -n "$bin_dir" ]; then
+  bin_dir_explicit=1
+fi
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -31,7 +44,12 @@ while [ "$#" -gt 0 ]; do
         exit 1
       fi
       bin_dir="$2"
+      bin_dir_explicit=1
       shift 2
+      ;;
+    --global)
+      global_install=1
+      shift
       ;;
     --update)
       update=1
@@ -60,6 +78,63 @@ require_cmd() {
     printf '%s is required.\n' "$1" >&2
     exit 1
   fi
+}
+
+global_bin_dir() {
+  candidates="${SKILLHUB_GLOBAL_BIN_DIRS:-/opt/homebrew/bin:/usr/local/bin}"
+  old_ifs=$IFS
+  IFS=:
+  for dir in $candidates; do
+    [ -n "$dir" ] || continue
+    case ":${PATH:-}:" in
+      *":$dir:"*)
+        IFS=$old_ifs
+        printf '%s\n' "$dir"
+        return
+        ;;
+    esac
+  done
+  IFS=$old_ifs
+  printf '%s\n' "/usr/local/bin"
+}
+
+path_contains_dir() {
+  dir="$1"
+  case ":${PATH:-}:" in
+    *":$dir:"*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+print_path_note() {
+  dir="$1"
+  printf 'Note: %s is not in PATH.\n' "$dir"
+  printf 'Use it now with:\n'
+  printf '  export PATH="%s:$PATH"\n' "$dir"
+  printf 'Persist it for zsh with:\n'
+  printf "  echo 'export PATH=\"%s:\$PATH\"' >> ~/.zshrc\n" "$dir"
+  printf 'Or reinstall into a PATH directory with:\n'
+  printf '  sh install.sh --global\n'
+}
+
+auto_global_bin_dir() {
+  candidates="${SKILLHUB_GLOBAL_BIN_DIRS:-/opt/homebrew/bin:/usr/local/bin}"
+  old_ifs=$IFS
+  IFS=:
+  for dir in $candidates; do
+    [ -n "$dir" ] || continue
+    if path_contains_dir "$dir" && [ -d "$dir" ] && [ -w "$dir" ]; then
+      IFS=$old_ifs
+      printf '%s\n' "$dir"
+      return 0
+    fi
+  done
+  IFS=$old_ifs
+  return 1
 }
 
 is_checkout() {
@@ -125,9 +200,17 @@ bootstrap_repo() {
   printf '%s\n' "$repo_root"
 }
 
+if [ "$global_install" -eq 1 ]; then
+  bin_dir=$(global_bin_dir)
+fi
+
 if [ -z "$bin_dir" ]; then
-  require_home
-  bin_dir="$HOME/.local/bin"
+  if [ "$bin_dir_explicit" -eq 0 ] && bin_dir=$(auto_global_bin_dir); then
+    auto_global_selected=1
+  else
+    require_home
+    bin_dir="$HOME/.local/bin"
+  fi
 fi
 
 if repo_root=$(find_local_checkout); then
@@ -140,6 +223,12 @@ else
 fi
 
 require_cmd go
+
+if [ "$global_install" -eq 1 ] && [ -e "$bin_dir" ] && [ ! -w "$bin_dir" ]; then
+  printf 'Global install directory is not writable: %s\n' "$bin_dir" >&2
+  printf 'Run with a writable --bin-dir, or rerun with elevated permissions if appropriate.\n' >&2
+  exit 1
+fi
 
 mkdir -p "$bin_dir"
 
@@ -181,11 +270,10 @@ mv "$tmp_path" "$command_path"
 
 printf 'Installed skillhub command to %s\n' "$command_path"
 printf 'Source checkout: %s\n' "$repo_root"
-case ":${PATH:-}:" in
-  *":$bin_dir:"*)
-    ;;
-  *)
-    printf 'Note: %s is not in PATH. Add it before using skillhub by name.\n' "$bin_dir"
-    ;;
-esac
+if [ "$auto_global_selected" -eq 1 ]; then
+  printf 'Selected writable PATH install directory: %s\n' "$bin_dir"
+fi
+if ! path_contains_dir "$bin_dir"; then
+  print_path_note "$bin_dir"
+fi
 printf 'Try: skillhub version\n'

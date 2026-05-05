@@ -143,9 +143,10 @@ func TestDashboardRendersSectionNavigation(t *testing.T) {
 	for _, want := range []string{
 		"1 Skills",
 		"2 Installed",
-		"3 Sources",
-		"4 Targets",
-		"5 Update",
+		"3 Usage",
+		"4 Sources",
+		"5 Targets",
+		"6 Update",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected dashboard navigation to contain %q, got:\n%s", want, view)
@@ -225,6 +226,29 @@ func TestParseInstalledUsageTSV(t *testing.T) {
 	}
 }
 
+func TestBuildUsageSummariesGroupsRowsBySkill(t *testing.T) {
+	rows := []InstalledSkill{
+		{Source: "agent-rules", Skill: "rules-selector", Managed: "yes", Target: "codex", Scope: "global", ProjectPath: "-", UpdatedAt: "2026-05-05T01:00:00Z"},
+		{Source: "agent-rules", Skill: "rules-selector", Managed: "yes", Target: "codex", Scope: "project", ProjectPath: "/tmp/project-a", UpdatedAt: "2026-05-05T02:00:00Z"},
+		{Source: "agent-rules", Skill: "rules-selector", Managed: "yes", Target: "claude", Scope: "project", ProjectPath: "/tmp/project-b", UpdatedAt: "2026-05-05T03:00:00Z"},
+		{Source: "agent-rules", Skill: "go-project-rules", Managed: "yes", Target: "codex", Scope: "project", ProjectPath: "/tmp/project-a", UpdatedAt: "2026-05-05T00:00:00Z"},
+	}
+
+	summaries := buildUsageSummaries(rows)
+	if len(summaries) != 2 {
+		t.Fatalf("expected 2 summaries, got %#v", summaries)
+	}
+	var rules UsageSummary
+	for _, summary := range summaries {
+		if summary.Key == "agent-rules/rules-selector" {
+			rules = summary
+		}
+	}
+	if rules.InstallCount != 3 || rules.ProjectCount != 2 || rules.TargetCount != 3 || rules.LatestUpdated != "2026-05-05T03:00:00Z" {
+		t.Fatalf("unexpected rules-selector summary: %#v", rules)
+	}
+}
+
 func TestMergeInstalledUsageRowsSkipsScannedDuplicates(t *testing.T) {
 	scanned := []InstalledSkill{
 		{Target: "codex", Scope: "project", Skill: "rules-selector", InstalledPath: "/tmp/project/.agents/skills/rules-selector", Path: "/tmp/project/.agents/skills/rules-selector"},
@@ -243,6 +267,135 @@ func TestMergeInstalledUsageRowsSkipsScannedDuplicates(t *testing.T) {
 	}
 	if !rows[1].RegistryOnly || rows[1].Target != "claude" {
 		t.Fatalf("expected usage-only claude row, got %#v", rows[1])
+	}
+}
+
+func TestUsageScreenShowsSummaryRows(t *testing.T) {
+	rows := []InstalledSkill{
+		{Source: "agent-rules", Skill: "rules-selector", Managed: "yes", Target: "codex", Scope: "global", ProjectPath: "-", Path: "/tmp/global/rules-selector", UpdatedAt: "2026-05-05T01:00:00Z"},
+		{Source: "agent-rules", Skill: "rules-selector", Managed: "yes", Target: "codex", Scope: "project", ProjectPath: "/tmp/project-a", Path: "/tmp/project-a/.agents/skills/rules-selector", UpdatedAt: "2026-05-05T02:00:00Z"},
+		{Source: "agent-rules", Skill: "rules-selector", Managed: "yes", Target: "claude", Scope: "project", ProjectPath: "/tmp/project-b", Path: "/tmp/project-b/.claude/skills/rules-selector", UpdatedAt: "2026-05-05T03:00:00Z"},
+	}
+	m := initialModel(".")
+	m.loading = false
+	m.width = 120
+	m.height = 40
+	m.viewMode = viewUsage
+	m.usageRows = rows
+	m.usageSummaries = buildUsageSummaries(rows)
+
+	view := stripANSI(m.View())
+	for _, want := range []string{
+		"Usage",
+		"Installs: 3",
+		"Skills: 1",
+		"Projects: 2",
+		"agent-rules/rules-selector",
+		"installs: 3",
+		"projects: 2",
+		"targets: 3",
+		"latest: 2026-05-05T03:00:00Z",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected usage screen to contain %q, got:\n%s", want, view)
+		}
+	}
+}
+
+func TestEnterOpensUsageDetails(t *testing.T) {
+	rows := []InstalledSkill{
+		{Source: "agent-rules", Skill: "rules-selector", Managed: "yes", Target: "codex", Scope: "global", ProjectPath: "-", Path: "/tmp/global/rules-selector", ContentHash: "global-hash", UpdatedAt: "2026-05-05T01:00:00Z"},
+		{Source: "agent-rules", Skill: "rules-selector", Managed: "yes", Target: "gemini", Scope: "project", ProjectPath: "/tmp/project-b", Path: "/tmp/project-b/.gemini/skills/rules-selector", ContentHash: "project-hash", UpdatedAt: "2026-05-05T03:00:00Z"},
+	}
+	m := initialModel(".")
+	m.loading = false
+	m.width = 120
+	m.height = 40
+	m.viewMode = viewUsage
+	m.usageRows = rows
+	m.usageSummaries = buildUsageSummaries(rows)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	if m.viewMode != viewUsageDetails {
+		t.Fatalf("expected usage details view, got %q", m.viewMode)
+	}
+
+	view := stripANSI(m.View())
+	for _, want := range []string{
+		"Usage details",
+		"agent-rules/rules-selector",
+		"Installed in: 2",
+		"Projects: 1",
+		"Codex global",
+		"LOCAL PROJECT",
+		"Gemini project",
+		"Project root: /tmp/project-b",
+		"hash: project-hash",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected usage details to contain %q, got:\n%s", want, view)
+		}
+	}
+}
+
+func TestUsageUpdateArgsAndGlobalOnlyRefusal(t *testing.T) {
+	if got := usageUpdateArgsForKey("agent-rules/rules-selector"); strings.Join(got, " ") != "usage update --projects agent-rules/rules-selector" {
+		t.Fatalf("unexpected usage update args: %#v", got)
+	}
+
+	m := initialModel(".")
+	m.loading = false
+	m.viewMode = viewUsage
+	m.usageRows = []InstalledSkill{
+		{Source: "agent-rules", Skill: "rules-selector", Managed: "yes", Target: "codex", Scope: "global", ProjectPath: "-", Path: "/tmp/global/rules-selector"},
+	}
+	m.usageSummaries = buildUsageSummaries(m.usageRows)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+	m = updated.(model)
+	if cmd != nil || m.busy {
+		t.Fatalf("global-only usage update should not start a command")
+	}
+	if !strings.Contains(m.status, "has no recorded project installs") {
+		t.Fatalf("expected global-only refusal status, got %q", m.status)
+	}
+}
+
+func TestUsageDetailsUpdateReturnsToDetailsAfterReload(t *testing.T) {
+	rows := []InstalledSkill{
+		{Source: "agent-rules", Skill: "rules-selector", Managed: "yes", Target: "codex", Scope: "global", ProjectPath: "-", Path: "/tmp/global/rules-selector", UpdatedAt: "2026-05-05T01:00:00Z"},
+		{Source: "agent-rules", Skill: "rules-selector", Managed: "yes", Target: "codex", Scope: "project", ProjectPath: "/tmp/project-a", Path: "/tmp/project-a/.agents/skills/rules-selector", UpdatedAt: "2026-05-05T02:00:00Z"},
+	}
+	m := initialModel(".")
+	m.loading = false
+	m.width = 120
+	m.height = 40
+	m.viewMode = viewUsage
+	m.usageRows = rows
+	m.usageSummaries = buildUsageSummaries(rows)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+	m = updated.(model)
+	if cmd == nil || !m.busy || !m.returnToUsageDetails {
+		t.Fatalf("expected usage details update command and detail-return marker")
+	}
+
+	updated, _ = m.Update(commandDoneMsg{action: "Update usage", output: "Updated project usage: updated=0 unchanged=1 skipped=0 failed=0\n"})
+	m = updated.(model)
+	if !m.loading || m.viewMode != viewUsageDetails {
+		t.Fatalf("expected usage details to remain active during reload, got view=%q loading=%v", m.viewMode, m.loading)
+	}
+
+	updated, _ = m.Update(usageLoadedMsg{rows: rows})
+	m = updated.(model)
+	if m.viewMode != viewUsageDetails {
+		t.Fatalf("expected usage details after reload, got %q", m.viewMode)
+	}
+	if !strings.Contains(m.status, "Updated project usage: updated=0 unchanged=1 skipped=0 failed=0") {
+		t.Fatalf("expected usage update summary to remain visible, got %q", m.status)
 	}
 }
 
@@ -530,10 +683,17 @@ func TestLeftRightSwitchDashboardSections(t *testing.T) {
 	}
 
 	m.loading = false
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m = updated.(model)
+	if m.viewMode != viewUsage || !m.loading {
+		t.Fatalf("expected right from installed to load usage section, got view=%q loading=%v", m.viewMode, m.loading)
+	}
+
+	m.loading = false
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyLeft})
 	m = updated.(model)
-	if m.viewMode != viewSkills || !m.loading {
-		t.Fatalf("expected left from installed to load skills section, got view=%q loading=%v", m.viewMode, m.loading)
+	if m.viewMode != viewInstalled || !m.loading {
+		t.Fatalf("expected left from usage to load installed section, got view=%q loading=%v", m.viewMode, m.loading)
 	}
 }
 

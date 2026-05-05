@@ -39,7 +39,8 @@ smoke-temp:
 	@set -e; \
 	tmp=$$(mktemp -d); \
 	project="$$tmp/project"; \
-	mkdir -p "$$project"; \
+	project_b="$$tmp/project-b"; \
+	mkdir -p "$$project" "$$project_b"; \
 	printf 'Using temp dir: %s\n' "$$tmp"; \
 	SKILLHUB_CONFIG_DIR="$$tmp/config" \
 	SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" \
@@ -59,10 +60,16 @@ smoke-temp:
 		SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" \
 		$(SKILLHUB) install rules-selector --target codex --scope project --project "$$project"; \
 		SKILLHUB_CONFIG_DIR="$$tmp/config" \
+		SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" \
+		$(SKILLHUB) install rules-selector --target claude --scope project --project "$$project_b"; \
+		SKILLHUB_CONFIG_DIR="$$tmp/config" \
 		$(SKILLHUB) installed usage rules-selector --tsv | grep "$$project"; \
 		SKILLHUB_CONFIG_DIR="$$tmp/config" \
-		SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" \
-		$(SKILLHUB) installed usage update --projects rules-selector -v; \
+		$(SKILLHUB) installed usage rules-selector --tsv | grep "$$project_b"; \
+		usage_update_output=$$(SKILLHUB_CONFIG_DIR="$$tmp/config" SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" $(SKILLHUB) installed usage update --projects rules-selector -v); \
+		printf '%s\n' "$$usage_update_output"; \
+		printf '%s\n' "$$usage_update_output" | grep 'Checking codex/project rules-selector'; \
+		printf '%s\n' "$$usage_update_output" | grep 'Checking claude/project rules-selector'; \
 		SKILLHUB_CONFIG_DIR="$$tmp/config" \
 		SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" \
 		$(SKILLHUB) recommend --project "$$project"; \

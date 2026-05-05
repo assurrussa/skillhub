@@ -74,7 +74,16 @@ func updateCommand() *cobra.Command {
 			if verbose {
 				skillArgs = append(skillArgs, "--verbose")
 			}
-			return runScript(repoRoot, "scripts/installed.sh", skillArgs...)
+			if err := runScript(repoRoot, "scripts/installed.sh", skillArgs...); err != nil {
+				return err
+			}
+
+			fmt.Fprintln(out, "Updating recorded project usage...")
+			usageArgs := []string{"usage", "update", "--projects"}
+			if verbose {
+				usageArgs = append(usageArgs, "--verbose")
+			}
+			return runScript(repoRoot, "scripts/installed.sh", usageArgs...)
 		},
 	}
 	cmd.Flags().StringVar(&binDir, "bin-dir", "", "install directory for the skillhub command")

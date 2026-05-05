@@ -78,9 +78,21 @@ type InstallTargetChoice struct {
 	Managed     string
 }
 
+type UsageSummary struct {
+	Key           string
+	Source        string
+	Skill         string
+	InstallCount  int
+	ProjectCount  int
+	TargetCount   int
+	LatestUpdated string
+}
+
 const (
 	viewSkills           = "skills"
 	viewInstalled        = "installed"
+	viewUsage            = "usage"
+	viewUsageDetails     = "usage-details"
 	viewSources          = "sources"
 	viewUpdate           = "update"
 	viewDefaults         = "defaults"
@@ -116,23 +128,29 @@ type installedStats struct {
 type model struct {
 	repoRoot string
 
-	skills        []Skill
-	filtered      []int
-	selected      map[string]bool
-	sources       []SourcePreset
-	installedRows []InstalledSkill
-	defaults      []SourcePreset
-	targets       []Target
-	targetStats   map[string]TargetDetection
+	skills         []Skill
+	filtered       []int
+	selected       map[string]bool
+	sources        []SourcePreset
+	installedRows  []InstalledSkill
+	usageRows      []InstalledSkill
+	usageSummaries []UsageSummary
+	defaults       []SourcePreset
+	targets        []Target
+	targetStats    map[string]TargetDetection
 
 	cursor                int
 	installedCursor       int
 	installedDetailCursor int
+	usageCursor           int
+	usageDetailCursor     int
 	defaultCursor         int
 	targetCursor          int
 	offset                int
 	installedOffset       int
 	installedDetailOffset int
+	usageOffset           int
+	usageDetailOffset     int
 	targetOffset          int
 	width                 int
 	height                int
@@ -146,6 +164,8 @@ type model struct {
 	viewMode              string
 	previousViewMode      string
 	installedDetailKey    string
+	usageDetailKey        string
+	returnToUsageDetails  bool
 	reloadOnFinish        bool
 	postReloadStatus      string
 
@@ -175,6 +195,11 @@ type sourcesLoadedMsg struct {
 }
 
 type installedLoadedMsg struct {
+	rows []InstalledSkill
+	err  error
+}
+
+type usageLoadedMsg struct {
 	rows []InstalledSkill
 	err  error
 }
@@ -266,6 +291,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.ensureCursorVisible()
+		m.ensureUsageCursorVisible()
+		m.ensureUsageDetailCursorVisible()
 		m.ensureTargetCursorVisible()
 		return m, nil
 	case skillsLoadedMsg:
@@ -335,6 +362,51 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = fmt.Sprintf("Loaded %d installed skill row(s).", len(m.installedRows))
 		}
 		return m, nil
+	case usageLoadedMsg:
+		m.loading = false
+		returnToDetails := m.returnToUsageDetails
+		detailKey := m.usageDetailKey
+		m.returnToUsageDetails = false
+		if msg.err != nil {
+			m.postReloadStatus = ""
+			m.status = "Load usage failed: " + msg.err.Error()
+			return m, nil
+		}
+		m.usageRows = msg.rows
+		m.usageSummaries = buildUsageSummaries(msg.rows)
+		if m.usageCursor >= len(m.usageSummaries) {
+			m.usageCursor = len(m.usageSummaries) - 1
+		}
+		if m.usageCursor < 0 {
+			m.usageCursor = 0
+		}
+		m.ensureUsageCursorVisible()
+		if returnToDetails && strings.TrimSpace(detailKey) != "" {
+			m.usageDetailKey = detailKey
+			detailRows := m.usageDetailRows()
+			if len(detailRows) > 0 {
+				if m.usageDetailCursor >= len(detailRows) {
+					m.usageDetailCursor = len(detailRows) - 1
+				}
+				if m.usageDetailCursor < 0 {
+					m.usageDetailCursor = 0
+				}
+				m.ensureUsageDetailCursorVisible()
+				m.viewMode = viewUsageDetails
+			} else {
+				m.viewMode = viewUsage
+				m.usageDetailKey = ""
+			}
+		} else {
+			m.viewMode = viewUsage
+		}
+		if strings.TrimSpace(m.postReloadStatus) != "" {
+			m.status = m.postReloadStatus
+			m.postReloadStatus = ""
+		} else {
+			m.status = fmt.Sprintf("Loaded %d managed usage row(s).", len(m.usageRows))
+		}
+		return m, nil
 	case targetsLoadedMsg:
 		m.loading = false
 		m.viewMode = viewTargets
@@ -392,6 +464,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.postReloadStatus = successStatus
 			m.status = "Reloading installed skills..."
 			return m, loadInstalled(m.repoRoot)
+		}
+		if msg.action == "Update usage" {
+			m.loading = true
+			if !m.returnToUsageDetails {
+				m.viewMode = viewUsage
+			}
+			m.postReloadStatus = successStatus
+			m.status = "Reloading usage..."
+			return m, loadUsage(m.repoRoot)
 		}
 		return m, nil
 	case tea.KeyMsg:
@@ -462,10 +543,12 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "2":
 		return m.openDashboardSection(viewInstalled)
 	case "3":
-		return m.openDashboardSection(viewSources)
+		return m.openDashboardSection(viewUsage)
 	case "4":
-		return m.openDashboardSection(viewTargets)
+		return m.openDashboardSection(viewSources)
 	case "5":
+		return m.openDashboardSection(viewTargets)
+	case "6":
 		return m.openDashboardSection(viewUpdate)
 	}
 
@@ -485,6 +568,10 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateInstalledDetailsKey(msg)
 	}
 
+	if m.viewMode == viewUsageDetails {
+		return m.updateUsageDetailsKey(msg)
+	}
+
 	if m.viewMode == viewInstallResult {
 		return m.updateInstallResultKey(msg)
 	}
@@ -495,6 +582,10 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if m.viewMode == viewInstalled {
 		return m.updateInstalledKey(msg)
+	}
+
+	if m.viewMode == viewUsage {
+		return m.updateUsageKey(msg)
 	}
 
 	if m.viewMode == viewSources {
@@ -599,6 +690,9 @@ func (m model) reloadCurrentView(status string) (tea.Model, tea.Cmd) {
 	case viewInstalled:
 		m.viewMode = viewInstalled
 		return m, loadInstalled(m.repoRoot)
+	case viewUsage:
+		m.viewMode = viewUsage
+		return m, loadUsage(m.repoRoot)
 	case viewSources:
 		m.viewMode = viewSources
 		return m, loadSources(m.repoRoot)
@@ -628,6 +722,11 @@ func (m model) openDashboardSection(section string) (tea.Model, tea.Cmd) {
 		m.viewMode = viewInstalled
 		m.status = "Loading installed skills..."
 		return m, loadInstalled(m.repoRoot)
+	case viewUsage:
+		m.loading = true
+		m.viewMode = viewUsage
+		m.status = "Loading usage..."
+		return m, loadUsage(m.repoRoot)
 	case viewSources:
 		m.loading = true
 		m.viewMode = viewSources
@@ -664,7 +763,7 @@ func (m model) moveDashboardSection(delta int) (tea.Model, tea.Cmd) {
 
 func (m model) canMoveDashboardSection() bool {
 	switch m.viewMode {
-	case viewSkills, viewInstalled, viewSources, viewUpdate:
+	case viewSkills, viewInstalled, viewUsage, viewSources, viewUpdate:
 		return true
 	case viewTargets:
 		return m.targetPurpose != "install"
@@ -845,6 +944,108 @@ func (m model) updateInstalledDetailsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.viewMode = viewConfirmDelete
 		m.status = "Confirm uninstall."
 		return m, nil
+	default:
+		return m, nil
+	}
+}
+
+func (m model) updateUsageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q":
+		return m, tea.Quit
+	case "up", "k":
+		if m.usageCursor > 0 {
+			m.usageCursor--
+			m.ensureUsageCursorVisible()
+		}
+		return m, nil
+	case "down", "j":
+		if m.usageCursor < len(m.usageSummaries)-1 {
+			m.usageCursor++
+			m.ensureUsageCursorVisible()
+		}
+		return m, nil
+	case "enter":
+		summary, ok := m.currentUsageSummary()
+		if !ok {
+			m.status = "No managed usage selected."
+			return m, nil
+		}
+		m.usageDetailKey = summary.Key
+		m.usageDetailCursor = 0
+		m.usageDetailOffset = 0
+		m.ensureUsageDetailCursorVisible()
+		m.viewMode = viewUsageDetails
+		m.status = "Viewing usage for " + summary.Key + "."
+		return m, nil
+	case "u":
+		m.returnToUsageDetails = false
+		summary, ok := m.currentUsageSummary()
+		if !ok {
+			m.status = "No managed usage selected."
+			return m, nil
+		}
+		if summary.ProjectCount == 0 {
+			m.status = summary.Key + " has no recorded project installs to update."
+			return m, nil
+		}
+		m.busy = true
+		m.status = "Updating recorded project usage for " + summary.Key + "..."
+		return m, runInstalledCommand(m.repoRoot, "Update usage", usageUpdateArgsForKey(summary.Key)...)
+	case "r":
+		m.returnToUsageDetails = false
+		return m.reloadCurrentView("Reloading usage...")
+	default:
+		return m, nil
+	}
+}
+
+func (m model) updateUsageDetailsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q":
+		return m, tea.Quit
+	case "esc", "b":
+		m.viewMode = viewUsage
+		m.returnToUsageDetails = false
+		m.status = "Returned to usage."
+		return m, nil
+	case "up", "k":
+		if m.usageDetailCursor > 0 {
+			m.usageDetailCursor--
+			m.ensureUsageDetailCursorVisible()
+		}
+		return m, nil
+	case "down", "j":
+		rows := m.usageDetailRows()
+		if m.usageDetailCursor < len(rows)-1 {
+			m.usageDetailCursor++
+			m.ensureUsageDetailCursorVisible()
+		}
+		return m, nil
+	case "u":
+		key := m.usageDetailKey
+		if strings.TrimSpace(key) == "" {
+			if row, ok := m.currentUsageDetail(); ok {
+				key = installedSkillKey(row)
+			}
+		}
+		if strings.TrimSpace(key) == "" {
+			m.status = "No managed usage selected."
+			return m, nil
+		}
+		if !m.usageHasProjectRows(key) {
+			m.status = key + " has no recorded project installs to update."
+			return m, nil
+		}
+		m.busy = true
+		m.returnToUsageDetails = true
+		m.status = "Updating recorded project usage for " + key + "..."
+		return m, runInstalledCommand(m.repoRoot, "Update usage", usageUpdateArgsForKey(key)...)
+	case "r":
+		m.loading = true
+		m.returnToUsageDetails = true
+		m.status = "Reloading usage..."
+		return m, loadUsage(m.repoRoot)
 	default:
 		return m, nil
 	}
@@ -1087,9 +1288,10 @@ func (m model) renderNavigation(width int) string {
 	}{
 		{"1", "Skills", viewSkills},
 		{"2", "Installed", viewInstalled},
-		{"3", "Sources", viewSources},
-		{"4", "Targets", viewTargets},
-		{"5", "Update", viewUpdate},
+		{"3", "Usage", viewUsage},
+		{"4", "Sources", viewSources},
+		{"5", "Targets", viewTargets},
+		{"6", "Update", viewUpdate},
 	}
 	rendered := make([]string, 0, len(items))
 	current := m.dashboardSection()
@@ -1123,6 +1325,9 @@ func (m model) renderBody(width int) string {
 	if m.viewMode == viewInstalledDetails {
 		return panel("Installed skill details", m.installedDetailsContent(width-6), width)
 	}
+	if m.viewMode == viewUsageDetails {
+		return panel("Usage details", m.usageDetailsContent(width-6), width)
+	}
 	if m.viewMode == viewInstallResult {
 		return panel("Install complete", m.installResultContent(width-6), width)
 	}
@@ -1131,6 +1336,9 @@ func (m model) renderBody(width int) string {
 	}
 	if m.viewMode == viewInstalled {
 		return panel("Installed skills", m.installedContent(width-6), width)
+	}
+	if m.viewMode == viewUsage {
+		return panel("Usage", m.usageContent(width-6), width)
 	}
 	if m.viewMode == viewSources {
 		return panel("Sources", m.sourcesContent(width-6), width)
@@ -1435,6 +1643,117 @@ func (m model) installedDetailsContent(width int) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+func (m model) usageContent(width int) string {
+	legend := helpStyle.Render("Registry usage only: managed installs created or updated by Skillhub")
+	if len(m.usageSummaries) == 0 {
+		return legend + "\n\nNo managed usage recorded.\n\nInstall a skill through Skillhub to create usage records."
+	}
+
+	var b strings.Builder
+	stats := installedOverviewStats(m.usageRows)
+	fmt.Fprintf(&b, "%s   %s   %s   %s\n",
+		badgeStyle.Render(fmt.Sprintf("Installs: %d", stats.Installed)),
+		badgeStyle.Render(fmt.Sprintf("Skills: %d", stats.Skills)),
+		badgeStyle.Render(fmt.Sprintf("Projects: %d", stats.Projects)),
+		badgeStyle.Render(fmt.Sprintf("Managed: %d", stats.Managed)),
+	)
+	fmt.Fprintln(&b)
+	fmt.Fprintln(&b, legend)
+	fmt.Fprintln(&b)
+
+	visible := m.usageVisibleCount()
+	end := m.usageOffset + visible
+	if end > len(m.usageSummaries) {
+		end = len(m.usageSummaries)
+	}
+	for rowIndex, summary := range m.usageSummaries[m.usageOffset:end] {
+		i := m.usageOffset + rowIndex
+		cursor := " "
+		if i == m.usageCursor {
+			cursor = "›"
+		}
+		title := fmt.Sprintf("%s %s", cursor, summary.Key)
+		if i == m.usageCursor {
+			title = activeRowStyle.Render(title)
+		}
+		if summary.ProjectCount > 0 {
+			title = selectedRowStyle.Render(title)
+		}
+		meta := fmt.Sprintf("    installs: %d   projects: %d   targets: %d",
+			summary.InstallCount,
+			summary.ProjectCount,
+			summary.TargetCount,
+		)
+		if strings.TrimSpace(summary.LatestUpdated) != "" && summary.LatestUpdated != "-" {
+			meta += "   latest: " + summary.LatestUpdated
+		}
+		fmt.Fprintln(&b, title)
+		fmt.Fprintln(&b, subtleStyle.Render(meta))
+		if rowIndex != end-m.usageOffset-1 {
+			fmt.Fprintln(&b)
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) usageDetailsContent(width int) string {
+	rows := m.usageDetailRows()
+	if len(rows) == 0 {
+		return "No usage locations found."
+	}
+	summary := summarizeUsageRows(installedSkillKey(rows[0]), rows)
+
+	var b strings.Builder
+	fmt.Fprintln(&b, titleStyle.Render(summary.Key))
+	fmt.Fprintln(&b)
+	fmt.Fprintf(&b, "%s   %s   %s\n\n",
+		badgeStyle.Render(fmt.Sprintf("Installed in: %d", summary.InstallCount)),
+		badgeStyle.Render(fmt.Sprintf("Projects: %d", summary.ProjectCount)),
+		badgeStyle.Render(fmt.Sprintf("Targets: %d", summary.TargetCount)),
+	)
+
+	visible := m.usageDetailVisibleCount()
+	end := m.usageDetailOffset + visible
+	if end > len(rows) {
+		end = len(rows)
+	}
+	for rowIndex, row := range rows[m.usageDetailOffset:end] {
+		i := m.usageDetailOffset + rowIndex
+		cursor := " "
+		if i == m.usageDetailCursor {
+			cursor = "›"
+		}
+		title := fmt.Sprintf("%s %s", cursor, targetScopeLabel(row.Target, row.Scope))
+		if row.Scope == "project" && strings.TrimSpace(row.ProjectPath) != "" && row.ProjectPath != "-" {
+			title = fmt.Sprintf("%s %s %s", cursor, projectBadgeStyle.Render("LOCAL PROJECT"), targetScopeLabel(row.Target, row.Scope))
+		}
+		if i == m.usageDetailCursor {
+			title = activeRowStyle.Render(title)
+		}
+		fmt.Fprintln(&b, title)
+		if strings.TrimSpace(row.ProjectPath) != "" && row.ProjectPath != "-" {
+			fmt.Fprintln(&b, "    "+projectBadgeStyle.Render("Project root: "+truncate(row.ProjectPath, max(12, width-18))))
+		}
+		fmt.Fprintln(&b, subtleStyle.Render("    path: "+truncate(row.Path, max(12, width-10))))
+		metaParts := []string{fmt.Sprintf("source: %s", emptyLabel(row.Source, "-"))}
+		if strings.TrimSpace(row.ContentHash) != "" && row.ContentHash != "-" {
+			metaParts = append(metaParts, "hash: "+row.ContentHash)
+		}
+		if strings.TrimSpace(row.InstalledAt) != "" && row.InstalledAt != "-" {
+			metaParts = append(metaParts, "installed: "+row.InstalledAt)
+		}
+		if strings.TrimSpace(row.UpdatedAt) != "" && row.UpdatedAt != "-" {
+			metaParts = append(metaParts, "updated: "+row.UpdatedAt)
+		}
+		meta := indent(wrapText(strings.Join(metaParts, "   "), max(12, width-4)), "    ")
+		fmt.Fprintln(&b, subtleStyle.Render(meta))
+		if rowIndex != end-m.usageDetailOffset-1 {
+			fmt.Fprintln(&b)
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
 func (m model) installResultContent(width int) string {
 	if len(m.installResult.Targets) == 0 {
 		return "No install result available."
@@ -1492,8 +1811,9 @@ func (m model) updateContent(width int) string {
 		labelLine("Cascade", "skillhub update --cascade"),
 		labelLine("Verbose", "skillhub update --cascade -v"),
 		labelLine("Skills", "skillhub installed update"),
+		labelLine("Projects", "skillhub installed usage update --projects"),
 		"",
-		wrapText("Use 2 Installed and press u to update managed skills for a highlighted target/scope directly from TUI.", width),
+		wrapText("Use 2 Installed to update target folders, or 3 Usage to update recorded project installs for a highlighted skill.", width),
 	}
 	return strings.Join(lines, "\n")
 }
@@ -1519,13 +1839,13 @@ func (m model) confirmDeleteContent(width int) string {
 
 func (m model) helpContent(width int) string {
 	lines := []string{
-		"1/2/3/4/5   switch sections",
+		"1/2/3/4/5/6 switch sections",
 		"left/right  switch sections",
 		"j/k         move",
 		"space       select or toggle where applicable",
 		"enter       open or confirm",
 		"/           search skills",
-		"u           update highlighted installed target/scope",
+		"u           update highlighted install or usage entry",
 		"x           uninstall highlighted managed skill",
 		"s           sync sources",
 		"r           reload current section",
@@ -1591,6 +1911,9 @@ func (m model) helpText() string {
 	if m.viewMode == viewInstalledDetails {
 		return "j/k move location  u update  x uninstall  esc back  q quit"
 	}
+	if m.viewMode == viewUsageDetails {
+		return "j/k move location  u update project usage  r reload  esc back  q quit"
+	}
 	if m.viewMode == viewInstallResult {
 		return "enter/b back  t targets  q quit"
 	}
@@ -1598,21 +1921,24 @@ func (m model) helpText() string {
 		return "enter/y confirm  esc/n cancel  q quit"
 	}
 	if m.viewMode == viewInstalled {
-		return "1-5/left-right sections  j/k move  enter details  u update target  x uninstall managed  r reload  ? help  q quit"
+		return "1-6/left-right sections  j/k move  enter details  u update target  x uninstall managed  r reload  ? help  q quit"
+	}
+	if m.viewMode == viewUsage {
+		return "1-6/left-right sections  j/k move  enter details  u update project usage  r reload  ? help  q quit"
 	}
 	if m.viewMode == viewSources {
-		return "1-5/left-right sections  d presets  n custom  s sync  r reload  ? help  q quit"
+		return "1-6/left-right sections  d presets  n custom  s sync  r reload  ? help  q quit"
 	}
 	if m.viewMode == viewUpdate {
-		return "1-5/left-right sections  u installed screen  ? help  q quit"
+		return "1-6/left-right sections  u installed screen  ? help  q quit"
 	}
 	if m.viewMode == viewTargets {
 		if m.targetPurpose == "install" {
-			return "1-5 sections  j/k move  space toggle  enter/i install  a all  c clear  r reload  ? help  q quit"
+			return "1-6 sections  j/k move  space toggle  enter/i install  a all  c clear  r reload  ? help  q quit"
 		}
-		return "1-5/left-right sections  j/k move  r reload  ? help  q quit"
+		return "1-6/left-right sections  j/k move  r reload  ? help  q quit"
 	}
-	return "1-5/left-right sections  j/k move  space select  enter details  / search  a all  c clear  d presets  n source  t targets  i install  ? help  q quit"
+	return "1-6/left-right sections  j/k move  space select  enter details  / search  a all  c clear  d presets  n source  t targets  i install  ? help  q quit"
 }
 
 func (m model) targetsPanelTitle() string {
@@ -1738,6 +2064,46 @@ func (m *model) ensureInstalledDetailCursorVisible() {
 	}
 }
 
+func (m *model) ensureUsageCursorVisible() {
+	visible := m.usageVisibleCount()
+	if m.usageCursor < m.usageOffset {
+		m.usageOffset = m.usageCursor
+	}
+	if m.usageCursor >= m.usageOffset+visible {
+		m.usageOffset = m.usageCursor - visible + 1
+	}
+	if m.usageOffset < 0 {
+		m.usageOffset = 0
+	}
+	maxOffset := len(m.usageSummaries) - visible
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if m.usageOffset > maxOffset {
+		m.usageOffset = maxOffset
+	}
+}
+
+func (m *model) ensureUsageDetailCursorVisible() {
+	visible := m.usageDetailVisibleCount()
+	if m.usageDetailCursor < m.usageDetailOffset {
+		m.usageDetailOffset = m.usageDetailCursor
+	}
+	if m.usageDetailCursor >= m.usageDetailOffset+visible {
+		m.usageDetailOffset = m.usageDetailCursor - visible + 1
+	}
+	if m.usageDetailOffset < 0 {
+		m.usageDetailOffset = 0
+	}
+	maxOffset := len(m.usageDetailRows()) - visible
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if m.usageDetailOffset > maxOffset {
+		m.usageDetailOffset = maxOffset
+	}
+}
+
 func (m model) visibleCount() int {
 	if m.height <= 0 {
 		return 5
@@ -1761,6 +2127,28 @@ func (m model) installedVisibleCount() int {
 }
 
 func (m model) installedDetailVisibleCount() int {
+	if m.height <= 0 {
+		return 4
+	}
+	count := (m.height - 16) / 5
+	if count < 1 {
+		return 1
+	}
+	return count
+}
+
+func (m model) usageVisibleCount() int {
+	if m.height <= 0 {
+		return 6
+	}
+	count := (m.height - 14) / 3
+	if count < 1 {
+		return 1
+	}
+	return count
+}
+
+func (m model) usageDetailVisibleCount() int {
 	if m.height <= 0 {
 		return 4
 	}
@@ -1887,6 +2275,47 @@ func (m model) indexInstalledDetailRow(wanted InstalledSkill) int {
 	return 0
 }
 
+func (m model) currentUsageSummary() (UsageSummary, bool) {
+	if len(m.usageSummaries) == 0 || m.usageCursor < 0 || m.usageCursor >= len(m.usageSummaries) {
+		return UsageSummary{}, false
+	}
+	return m.usageSummaries[m.usageCursor], true
+}
+
+func (m model) currentUsageDetail() (InstalledSkill, bool) {
+	rows := m.usageDetailRows()
+	if len(rows) == 0 || m.usageDetailCursor < 0 || m.usageDetailCursor >= len(rows) {
+		return InstalledSkill{}, false
+	}
+	return rows[m.usageDetailCursor], true
+}
+
+func (m model) usageDetailRows() []InstalledSkill {
+	key := m.usageDetailKey
+	if strings.TrimSpace(key) == "" {
+		if summary, ok := m.currentUsageSummary(); ok {
+			key = summary.Key
+		}
+	}
+	rows := []InstalledSkill{}
+	for _, row := range m.usageRows {
+		if installedSkillKey(row) == key {
+			rows = append(rows, row)
+		}
+	}
+	sortInstalledRows(rows)
+	return rows
+}
+
+func (m model) usageHasProjectRows(key string) bool {
+	for _, row := range m.usageRows {
+		if installedSkillKey(row) == key && row.Scope == "project" {
+			return true
+		}
+	}
+	return false
+}
+
 func (m model) sourceCount() int {
 	seen := map[string]bool{}
 	for _, skill := range m.skills {
@@ -1903,6 +2332,8 @@ func (m model) dashboardSection() string {
 		return viewSkills
 	case viewInstalledDetails:
 		return viewInstalled
+	case viewUsageDetails:
+		return viewUsage
 	case viewDefaults, viewAddSource:
 		return viewSources
 	case viewConfirmDelete:
@@ -1920,7 +2351,7 @@ func (m model) dashboardSection() string {
 }
 
 func dashboardSections() []string {
-	return []string{viewSkills, viewInstalled, viewSources, viewTargets, viewUpdate}
+	return []string{viewSkills, viewInstalled, viewUsage, viewSources, viewTargets, viewUpdate}
 }
 
 func targetScopeLabel(target, scope string) string {
@@ -1954,6 +2385,52 @@ func installedOverviewStats(rows []InstalledSkill) installedStats {
 	stats.Skills = len(skills)
 	stats.Projects = len(projects)
 	return stats
+}
+
+func buildUsageSummaries(rows []InstalledSkill) []UsageSummary {
+	grouped := map[string][]InstalledSkill{}
+	for _, row := range rows {
+		key := installedSkillKey(row)
+		grouped[key] = append(grouped[key], row)
+	}
+	summaries := make([]UsageSummary, 0, len(grouped))
+	for key, group := range grouped {
+		summaries = append(summaries, summarizeUsageRows(key, group))
+	}
+	sort.SliceStable(summaries, func(i, j int) bool {
+		if summaries[i].Source != summaries[j].Source {
+			return summaries[i].Source < summaries[j].Source
+		}
+		return summaries[i].Skill < summaries[j].Skill
+	})
+	return summaries
+}
+
+func summarizeUsageRows(key string, rows []InstalledSkill) UsageSummary {
+	summary := UsageSummary{Key: key, InstallCount: len(rows)}
+	projects := map[string]bool{}
+	targets := map[string]bool{}
+	for _, row := range rows {
+		if summary.Source == "" {
+			summary.Source = row.Source
+		}
+		if summary.Skill == "" {
+			summary.Skill = row.Skill
+		}
+		if row.Scope == "project" && strings.TrimSpace(row.ProjectPath) != "" && row.ProjectPath != "-" {
+			projects[row.ProjectPath] = true
+		}
+		targets[row.Target+"/"+row.Scope] = true
+		if strings.TrimSpace(row.UpdatedAt) != "" && row.UpdatedAt != "-" && row.UpdatedAt > summary.LatestUpdated {
+			summary.LatestUpdated = row.UpdatedAt
+		}
+	}
+	summary.ProjectCount = len(projects)
+	summary.TargetCount = len(targets)
+	if summary.LatestUpdated == "" {
+		summary.LatestUpdated = "-"
+	}
+	return summary
 }
 
 func installedSkillKey(row InstalledSkill) string {
@@ -1997,6 +2474,8 @@ func installedSubgroup(row InstalledSkill) string {
 
 func sectionTitle(section string) string {
 	switch section {
+	case viewUsage:
+		return "Usage"
 	case viewInstalled:
 		return "Installed"
 	case viewSources:
@@ -2413,6 +2892,21 @@ func loadInstalled(repoRoot string) tea.Cmd {
 	}
 }
 
+func loadUsage(repoRoot string) tea.Cmd {
+	return func() tea.Msg {
+		output, err := runScript(repoRoot, "scripts/installed.sh", "usage", "--tsv")
+		if err != nil {
+			return usageLoadedMsg{err: commandError(err, output)}
+		}
+		rows, err := parseInstalledUsageTSV(output)
+		if err != nil {
+			return usageLoadedMsg{err: err}
+		}
+		sortInstalledRows(rows)
+		return usageLoadedMsg{rows: rows}
+	}
+}
+
 func runSkillCommand(repoRoot, action string, args ...string) tea.Cmd {
 	return func() tea.Msg {
 		output, err := runScript(repoRoot, "scripts/skills.sh", args...)
@@ -2468,6 +2962,10 @@ func installedUninstallArgsForRow(row InstalledSkill, projectDir string) []strin
 		args = append(args, "--project", installedRowProjectDir(row, projectDir))
 	}
 	return args
+}
+
+func usageUpdateArgsForKey(key string) []string {
+	return []string{"usage", "update", "--projects", key}
 }
 
 func installedRowProjectDir(row InstalledSkill, fallback string) string {

@@ -15,12 +15,16 @@ usage() {
 }
 
 update_sources_file=""
-cleanup_update_sources_file() {
+usage_snapshot_file=""
+cleanup_update_temp_files() {
   if [ -n "$update_sources_file" ]; then
     rm -f "$update_sources_file"
   fi
+  if [ -n "$usage_snapshot_file" ]; then
+    rm -f "$usage_snapshot_file"
+  fi
 }
-trap cleanup_update_sources_file EXIT HUP INT TERM
+trap cleanup_update_temp_files EXIT HUP INT TERM
 
 installed_skill_name() {
   wanted="$1"
@@ -660,22 +664,47 @@ usage_update_projects() {
   fi
   skillhub_validate_installed_registry_file
 
-  project_usage_count=0
+  usage_snapshot_file=$(mktemp "${TMPDIR:-/tmp}/skillhub-project-usage.XXXXXX")
+  {
+    skillhub_installed_header
+    while IFS='	' read -r source_name skill_name target scope project_path target_root installed_path source_ref source_location source_catalog content_hash installed_at updated_at extra; do
+      case "$source_name" in
+        ''|'#'*|'source')
+          continue
+          ;;
+      esac
+
+      if [ "$scope" != "project" ]; then
+        continue
+      fi
+      if ! usage_filter_list_matches "$source_name" "$skill_name" "$filters"; then
+        continue
+      fi
+
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$source_name" \
+        "$skill_name" \
+        "$target" \
+        "$scope" \
+        "$project_path" \
+        "$target_root" \
+        "$installed_path" \
+        "$source_ref" \
+        "$source_location" \
+        "$source_catalog" \
+        "$content_hash" \
+        "$installed_at" \
+        "$updated_at"
+    done < "$registry_file"
+  } > "$usage_snapshot_file"
+
+  project_usage_count=$(awk 'NR > 1 && $0 != "" { count++ } END { print count + 0 }' "$usage_snapshot_file")
   while IFS='	' read -r source_name skill_name target scope project_path target_root installed_path source_ref source_location source_catalog content_hash installed_at updated_at extra; do
     case "$source_name" in
       ''|'#'*|'source')
         continue
         ;;
     esac
-
-    if [ "$scope" != "project" ]; then
-      continue
-    fi
-    if ! usage_filter_list_matches "$source_name" "$skill_name" "$filters"; then
-      continue
-    fi
-
-    project_usage_count=$((project_usage_count + 1))
     if [ ! -d "$installed_path" ] || [ ! -f "$installed_path/SKILL.md" ] || [ ! -f "$installed_path/.skillhub.json" ]; then
       printf 'Skipped %s/project %s: managed install missing at %s\n' "$target" "$skill_name" "$installed_path"
       skipped_total=$((skipped_total + 1))
@@ -697,7 +726,9 @@ usage_update_projects() {
         skipped_total=$((skipped_total + 1))
         ;;
     esac
-  done < "$registry_file"
+  done < "$usage_snapshot_file"
+  rm -f "$usage_snapshot_file"
+  usage_snapshot_file=""
 
   if [ "$project_usage_count" -eq 0 ]; then
     printf 'No managed project-scope skill usage matched registry filters.\n'

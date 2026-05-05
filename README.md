@@ -148,10 +148,10 @@ skillhub install --all
 In the TUI:
 
 ```text
-1/2/3/4/5 switch sections
+1/2/3/4/5/6 switch sections
 j/k       move
 space     select/unselect
-enter     open highlighted skill details
+enter     open highlighted details
 /         search
 a         select all visible skills
 c         clear selection
@@ -159,7 +159,7 @@ d         open recommended source presets
 n         add custom source path or git URL
 t         choose install targets
 i         choose targets for selected skills
-u         update highlighted installed target/scope
+u         update highlighted install or usage entry
 x         uninstall highlighted managed skill
 s         sync sources
 r         reload catalog
@@ -168,15 +168,20 @@ q         quit
 ```
 
 The TUI opens as a dashboard with sections for catalog skills, installed skills,
-sources, targets, and update commands. The Skills section keeps the readable
-category tree and green `[✓]` selection marker. Press `i` after selecting skills
-to choose one or more supported assistants, then press `enter` to install to all
-selected targets.
+managed usage, sources, targets, and update commands. The Skills section keeps
+the readable category tree and green `[✓]` selection marker. Press `i` after
+selecting skills to choose one or more supported assistants, then press `enter`
+to install to all selected targets.
 
 The Installed section lists managed and unmanaged `SKILL.md` directories grouped
 by target/scope. Press `u` to update managed skills for the highlighted
 target/scope, or `x` to uninstall the highlighted managed skill after
 confirmation. Unmanaged uninstall remains CLI-only with explicit `--force`.
+
+The Usage section reads the managed usage registry and groups installs by
+`source/skill`. Press `enter` to see every global, project, or custom-directory
+location for that skill. Press `u` to update recorded project-scope installs for
+the highlighted skill.
 
 The Sources section shows active sources, recommended presets, custom source
 entry, and source sync. The Update section intentionally does not run
@@ -202,7 +207,8 @@ skillhub update --cascade -v
 
 Cascade update first updates the `skillhub` command, then updates managed
 installed skills across supported global targets and project targets for the
-current directory. It only touches skill directories with `.skillhub.json`.
+current directory, then updates all recorded project-scope installs from the
+managed usage registry. It only touches skill directories with `.skillhub.json`.
 Use `-v` or `--verbose` to print per-skill target, hash, and result details.
 
 Sources are stored outside the installed checkout:
@@ -302,8 +308,8 @@ managed skills. If the source or catalog entry is missing, the skill is skipped
 and left installed.
 
 `installed usage update --projects` updates only project-scope installs recorded
-in `installed.tsv`. Global installs remain covered by `installed update` and
-`skillhub update --cascade`.
+in `installed.tsv`. `skillhub update --cascade` also runs this project-usage
+update after the regular managed target update.
 
 Recommend a minimal project skill set without installing anything:
 
@@ -352,6 +358,19 @@ If two sources publish the same skill name, install one explicitly as
 ```sh
 skillhub skills install agent-rules/go-project-rules
 ```
+
+## Future Work
+
+The current implementation is intentionally conservative. Useful next slices:
+
+- Import existing `.skillhub.json` metadata into `installed.tsv` so installs
+  created before the usage registry can be managed without reinstalling.
+- Extend the TUI Usage manager with filters, update-all actions for a
+  skill/source, and bulk operations across recorded project installs.
+- Add real target adapters for more assistants after their current on-disk
+  formats and supported paths are verified.
+- Improve `skillhub recommend` so project analysis ranks skills more precisely
+  from repository signals, local rules, and active source catalogs.
 
 ## Validation
 

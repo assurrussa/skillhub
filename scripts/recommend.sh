@@ -69,7 +69,7 @@ while IFS='	' read -r source_name source_type source_location source_ref source_
   esac
   source_count=$((source_count + 1))
 
-  source_path=$(skillhub_sync_source "$source_name" "$source_type" "$source_location" "$source_ref")
+  source_path=$(skillhub_catalog_source "$source_name" "$source_type" "$source_location" "$source_ref" "$source_catalog")
   catalog_file="$source_path/$source_catalog"
   if [ ! -f "$catalog_file" ]; then
     printf 'Source %s is missing catalog: %s\n' "$source_name" "$catalog_file" >&2

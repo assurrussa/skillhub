@@ -85,7 +85,7 @@ list_catalogs() {
     esac
     source_count=$((source_count + 1))
 
-    source_path=$(skillhub_sync_source "$source_name" "$source_type" "$source_location" "$source_ref")
+    source_path=$(skillhub_catalog_source "$source_name" "$source_type" "$source_location" "$source_ref" "$source_catalog")
     catalog_file="$source_path/$source_catalog"
     if [ ! -f "$catalog_file" ]; then
       printf 'Source %s is missing catalog: %s\n' "$source_name" "$catalog_file" >&2
@@ -138,6 +138,7 @@ install_skill() {
   target="$3"
   scope="$4"
   project_path="$5"
+  write_sidecar="$6"
   wanted_source=""
   wanted_skill=$(skill_install_name "$wanted")
   case "$wanted" in
@@ -168,8 +169,12 @@ install_skill() {
     fi
     considered_source_count=$((considered_source_count + 1))
 
-    source_path=$(skillhub_sync_source "$source_name" "$source_type" "$source_location" "$source_ref")
+    source_path=$(skillhub_catalog_source "$source_name" "$source_type" "$source_location" "$source_ref" "$source_catalog")
     catalog_file="$source_path/$source_catalog"
+    if [ ! -f "$catalog_file" ]; then
+      printf 'Source %s is missing catalog: %s\n' "$source_name" "$catalog_file" >&2
+      exit 1
+    fi
 
     if awk -F '	' -v wanted="$wanted_skill" 'NR > 1 && $1 == wanted { found = 1 } END { exit(found ? 0 : 1) }' "$catalog_file"; then
       match_count=$((match_count + 1))
@@ -224,7 +229,9 @@ install_skill() {
     "$match_location" \
     "$match_catalog" \
     "$content_hash" \
-    "$project_path"
+    "$project_path" \
+    "" \
+    "$write_sidecar"
   printf 'Installed %s from %s to %s\n' "$wanted_skill" "$match_source" "$target_root/$wanted_skill"
 }
 
@@ -233,6 +240,7 @@ install_all() {
   target="$2"
   scope="$3"
   project_path="$4"
+  write_sidecar="$5"
 
   seen_install_names=""
   source_count=0
@@ -244,8 +252,12 @@ install_all() {
     esac
     source_count=$((source_count + 1))
 
-    source_path=$(skillhub_sync_source "$source_name" "$source_type" "$source_location" "$source_ref")
+    source_path=$(skillhub_catalog_source "$source_name" "$source_type" "$source_location" "$source_ref" "$source_catalog")
     catalog_file="$source_path/$source_catalog"
+    if [ ! -f "$catalog_file" ]; then
+      printf 'Source %s is missing catalog: %s\n' "$source_name" "$catalog_file" >&2
+      exit 1
+    fi
     while IFS='	' read -r skill_name category triggers description catalog_extra; do
       case "$skill_name" in
         ''|'#'*|'name')
@@ -276,15 +288,19 @@ install_all() {
         ;;
     esac
 
-    source_path=$(skillhub_sync_source "$source_name" "$source_type" "$source_location" "$source_ref")
+    source_path=$(skillhub_catalog_source "$source_name" "$source_type" "$source_location" "$source_ref" "$source_catalog")
     catalog_file="$source_path/$source_catalog"
+    if [ ! -f "$catalog_file" ]; then
+      printf 'Source %s is missing catalog: %s\n' "$source_name" "$catalog_file" >&2
+      exit 1
+    fi
     while IFS='	' read -r skill_name category triggers description catalog_extra; do
       case "$skill_name" in
         ''|'#'*|'name')
           continue
           ;;
       esac
-      install_skill "$source_name/$skill_name" "$target_root" "$target" "$scope" "$project_path"
+      install_skill "$source_name/$skill_name" "$target_root" "$target" "$scope" "$project_path" "$write_sidecar"
     done < "$catalog_file"
   done < "$sources_file"
 }
@@ -374,8 +390,15 @@ install_requested() {
   if [ "$metadata_scope" = "project" ]; then
     project_path=$(skillhub_project_dir "$project")
   fi
+  write_sidecar=1
+  if ! skillhub_install_uses_sidecar_metadata "$target" "$metadata_scope"; then
+    write_sidecar=0
+  fi
   if [ "$all" -eq 1 ]; then
-    install_all "$target_root" "$target" "$metadata_scope" "$project_path"
+    install_all "$target_root" "$target" "$metadata_scope" "$project_path" "$write_sidecar"
+    if [ "$metadata_scope" = "project" ]; then
+      skillhub_ensure_project_gitignore_metadata "$project_path"
+    fi
     return
   fi
 
@@ -392,8 +415,11 @@ install_requested() {
   done
 
   for skill_name in $skill_names; do
-    install_skill "$skill_name" "$target_root" "$target" "$metadata_scope" "$project_path"
+    install_skill "$skill_name" "$target_root" "$target" "$metadata_scope" "$project_path" "$write_sidecar"
   done
+  if [ "$metadata_scope" = "project" ]; then
+    skillhub_ensure_project_gitignore_metadata "$project_path"
+  fi
 }
 
 cmd="${1:-list}"

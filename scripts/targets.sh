@@ -52,7 +52,7 @@ detect_row() {
   else
     exists=$(skillhub_dir_exists_label "$path")
     skills=$(skillhub_count_skill_dirs "$path")
-    managed=$(skillhub_count_managed_skill_dirs "$path")
+    managed=$(skillhub_count_managed_skill_dirs "$path" "$scope")
   fi
 
   if [ "$format" = "tsv" ]; then

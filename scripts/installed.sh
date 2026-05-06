@@ -206,14 +206,29 @@ update_managed_skill() {
   scope="$4"
   verbose="$5"
   project_path="${6:-}"
+  registry_source="${7:-}"
+  registry_skill="${8:-}"
+  registry_installed_at="${9:-}"
   skill_basename=$(basename -- "$skill_dir")
   metadata_file="$skill_dir/.skillhub.json"
 
   update_result="skipped"
 
-  source_name=$(skillhub_metadata_value "$metadata_file" source)
-  skill_name=$(skillhub_metadata_value "$metadata_file" skill)
-  installed_at=$(skillhub_metadata_value "$metadata_file" installed_at)
+  if [ -n "$registry_source" ]; then
+    source_name="$registry_source"
+  else
+    source_name=$(skillhub_metadata_value "$metadata_file" source)
+  fi
+  if [ -n "$registry_skill" ]; then
+    skill_name="$registry_skill"
+  else
+    skill_name=$(skillhub_metadata_value "$metadata_file" skill)
+  fi
+  if [ -n "$registry_installed_at" ]; then
+    installed_at="$registry_installed_at"
+  else
+    installed_at=$(skillhub_metadata_value "$metadata_file" installed_at)
+  fi
   if [ "$installed_at" = "-" ]; then
     installed_at=""
   fi
@@ -251,7 +266,7 @@ update_managed_skill() {
     printf 'Checking %s/%s %s from %s\n' "$target" "$scope" "$skill_name" "$source_name"
   fi
 
-  source_path=$(skillhub_sync_source "$source_name" "$source_type" "$source_location" "$source_ref")
+  source_path=$(skillhub_sync_catalog_source "$source_name" "$source_type" "$source_location" "$source_ref" "$source_catalog")
   catalog_file="$source_path/$source_catalog"
   if [ ! -f "$catalog_file" ]; then
     printf 'Skipped %s/%s %s: source catalog missing: %s\n' "$target" "$scope" "$skill_name" "$catalog_file"
@@ -272,6 +287,10 @@ update_managed_skill() {
   tmp_dir="$target_root/.skillhub-update-$skill_name.$$"
   backup_dir="$target_root/.skillhub-backup-$skill_name.$$"
   rm -rf "$tmp_dir" "$backup_dir"
+  write_sidecar=1
+  if ! skillhub_install_uses_sidecar_metadata "$target" "$scope"; then
+    write_sidecar=0
+  fi
 
   if ! cp -R "$source_skill_dir" "$tmp_dir"; then
     rm -rf "$tmp_dir"
@@ -296,7 +315,11 @@ update_managed_skill() {
       "$source_catalog" \
       "$old_hash" \
       "$project_path" \
-      "$installed_at"
+      "$installed_at" \
+      "$write_sidecar"
+    if [ "$scope" = "project" ]; then
+      skillhub_ensure_project_gitignore_metadata "$project_path"
+    fi
     if [ "$verbose" -eq 1 ]; then
       printf 'Unchanged %s/%s %s (%s)\n' "$target" "$scope" "$skill_name" "$old_hash"
     fi
@@ -333,7 +356,11 @@ update_managed_skill() {
     "$source_catalog" \
     "$content_hash" \
     "$project_path" \
-    "$installed_at"
+    "$installed_at" \
+    "$write_sidecar"
+  if [ "$scope" = "project" ]; then
+    skillhub_ensure_project_gitignore_metadata "$project_path"
+  fi
 
   if [ "$verbose" -eq 1 ]; then
     printf 'Updated %s/%s %s %s -> %s\n' "$target" "$scope" "$skill_name" "$old_hash" "$content_hash"
@@ -366,9 +393,22 @@ update_target_root() {
     for skill_dir in "$target_root"/*; do
       [ -d "$skill_dir" ] || continue
       [ -f "$skill_dir/SKILL.md" ] || continue
-      [ -f "$skill_dir/.skillhub.json" ] || continue
+      registry_row=""
+      if [ "$scope" = "project" ]; then
+        registry_row=$(skillhub_installed_usage_row_by_path "$skill_dir" 2>/dev/null || true)
+        [ -n "$registry_row" ] || continue
+      elif [ ! -f "$skill_dir/.skillhub.json" ]; then
+        continue
+      fi
       managed_count=$((managed_count + 1))
-      update_managed_skill "$skill_dir" "$target_root" "$target" "$scope" "$verbose" "$project_path"
+      if [ -n "$registry_row" ]; then
+        registry_source=$(printf '%s\n' "$registry_row" | awk -F '	' '{ print $1 }')
+        registry_skill=$(printf '%s\n' "$registry_row" | awk -F '	' '{ print $2 }')
+        registry_installed_at=$(printf '%s\n' "$registry_row" | awk -F '	' '{ print $12 }')
+        update_managed_skill "$skill_dir" "$target_root" "$target" "$scope" "$verbose" "$project_path" "$registry_source" "$registry_skill" "$registry_installed_at"
+      else
+        update_managed_skill "$skill_dir" "$target_root" "$target" "$scope" "$verbose" "$project_path"
+      fi
       case "$update_result" in
         updated)
           target_updated=$((target_updated + 1))
@@ -415,7 +455,7 @@ update_all_supported_targets() {
     root_path="$3"
     root_project_path="$4"
 
-    if [ "$(skillhub_count_managed_skill_dirs "$root_path")" -eq 0 ]; then
+    if [ "$(skillhub_count_managed_skill_dirs "$root_path" "$root_scope")" -eq 0 ]; then
       if [ "$verbose" -eq 1 ]; then
         printf 'No managed skills in %s/%s: %s\n' "$root_target" "$root_scope" "$root_path"
       fi
@@ -733,13 +773,13 @@ usage_update_projects() {
         continue
         ;;
     esac
-    if [ ! -d "$installed_path" ] || [ ! -f "$installed_path/SKILL.md" ] || [ ! -f "$installed_path/.skillhub.json" ]; then
+    if [ ! -d "$installed_path" ] || [ ! -f "$installed_path/SKILL.md" ]; then
       printf 'Skipped %s/project %s: managed install missing at %s\n' "$target" "$skill_name" "$installed_path"
       skipped_total=$((skipped_total + 1))
       continue
     fi
 
-    update_managed_skill "$installed_path" "$target_root" "$target" "$scope" "$verbose" "$project_path"
+    update_managed_skill "$installed_path" "$target_root" "$target" "$scope" "$verbose" "$project_path" "$source_name" "$skill_name" "$installed_at"
     case "$update_result" in
       updated)
         updated_total=$((updated_total + 1))
@@ -856,7 +896,15 @@ uninstall_installed() {
     exit 1
   fi
 
-  if [ ! -f "$skill_dir/.skillhub.json" ] && [ "$force" -ne 1 ]; then
+  registry_row=$(skillhub_installed_usage_row_by_path "$skill_dir" 2>/dev/null || true)
+  if [ "$scope" = "project" ]; then
+    managed_by_sidecar=0
+  elif [ -f "$skill_dir/.skillhub.json" ]; then
+    managed_by_sidecar=1
+  else
+    managed_by_sidecar=0
+  fi
+  if [ "$managed_by_sidecar" -ne 1 ] && [ -z "$registry_row" ] && [ "$force" -ne 1 ]; then
     printf 'Refusing to uninstall unmanaged skill: %s\n' "$skill_dir" >&2
     printf 'Use --force to remove it anyway.\n' >&2
     exit 1

@@ -154,9 +154,12 @@ type model struct {
 	targetOffset          int
 	width                 int
 	height                int
+	bodyHeight            int
 	search                string
 	usageFilter           string
 	sourceInput           string
+	sourceNameInput       string
+	sourceField           int
 	searchMode            bool
 	usageFilterMode       bool
 	loading               bool
@@ -182,8 +185,9 @@ type model struct {
 }
 
 type skillsLoadedMsg struct {
-	skills []Skill
-	err    error
+	skills  []Skill
+	warning string
+	err     error
 }
 
 type defaultsLoadedMsg struct {
@@ -254,6 +258,11 @@ var (
 			Foreground(lipgloss.Color("230")).
 			Background(lipgloss.Color("24")).
 			Padding(0, 1)
+	searchBadgeStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("230")).
+				Background(lipgloss.Color("63")).
+				Bold(true).
+				Padding(0, 1)
 	projectBadgeStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("42")).
 				Bold(true)
@@ -314,6 +323,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.skills = msg.skills
 		m.applyFilter()
 		m.status = fmt.Sprintf("Loaded %d skill(s).", len(m.skills))
+		if strings.TrimSpace(msg.warning) != "" {
+			m.status += " " + compactOutput(msg.warning)
+		}
 		return m, nil
 	case defaultsLoadedMsg:
 		m.loading = false
@@ -678,6 +690,8 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, loadDefaultSources(m.repoRoot)
 	case "n":
 		m.sourceInput = ""
+		m.sourceNameInput = ""
+		m.sourceField = 0
 		m.viewMode = viewAddSource
 		m.status = "Enter a source path or git URL."
 		return m, nil
@@ -740,6 +754,9 @@ func (m model) reloadCurrentView(status string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) openDashboardSection(section string) (tea.Model, tea.Cmd) {
+	if m.dashboardSection() == viewSkills && section != viewSkills {
+		m.clearSkillSearch()
+	}
 	switch section {
 	case viewSkills:
 		m.loading = true
@@ -788,6 +805,15 @@ func (m model) moveDashboardSection(delta int) (tea.Model, tea.Cmd) {
 	}
 	next := (index + delta + len(sections)) % len(sections)
 	return m.openDashboardSection(sections[next])
+}
+
+func (m *model) clearSkillSearch() {
+	m.searchMode = false
+	if m.search == "" {
+		return
+	}
+	m.search = ""
+	m.applyFilter()
 }
 
 func (m model) canMoveDashboardSection() bool {
@@ -1210,6 +1236,8 @@ func (m model) updateSourcesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, loadDefaultSources(m.repoRoot)
 	case "n":
 		m.sourceInput = ""
+		m.sourceNameInput = ""
+		m.sourceField = 0
 		m.viewMode = viewAddSource
 		m.status = "Enter a source path or git URL."
 		return m, nil
@@ -1241,7 +1269,11 @@ func (m model) updateUpdateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m model) updateAddSourceKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.Type == tea.KeyRunes {
-		m.sourceInput += msg.String()
+		if m.sourceField == 1 {
+			m.sourceNameInput += msg.String()
+		} else {
+			m.sourceInput += msg.String()
+		}
 		return m, nil
 	}
 
@@ -1250,18 +1282,30 @@ func (m model) updateAddSourceKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.viewMode = viewSkills
 		m.status = "Returned to skills."
 		return m, nil
+	case "tab", "down":
+		m.sourceField = (m.sourceField + 1) % 2
+		return m, nil
+	case "shift+tab", "up":
+		m.sourceField = (m.sourceField + 1) % 2
+		return m, nil
 	case "enter":
-		location := strings.TrimSpace(m.sourceInput)
+		location := normalizeSourceLocationInput(m.sourceInput)
 		if location == "" {
 			m.status = "Enter a source path or git URL before adding."
 			return m, nil
 		}
+		args := sourceAddArgs(location, m.sourceNameInput)
 		m.busy = true
 		m.reloadOnFinish = true
 		m.status = "Adding source " + location + "..."
-		return m, runSourceCommand(m.repoRoot, "Add source", "add", location)
+		return m, runSourceCommand(m.repoRoot, "Add source", args...)
 	case "backspace":
-		if m.sourceInput != "" {
+		if m.sourceField == 1 {
+			if m.sourceNameInput != "" {
+				runes := []rune(m.sourceNameInput)
+				m.sourceNameInput = string(runes[:len(runes)-1])
+			}
+		} else if m.sourceInput != "" {
 			runes := []rune(m.sourceInput)
 			m.sourceInput = string(runes[:len(runes)-1])
 		}
@@ -1300,6 +1344,8 @@ func (m model) updateDefaultsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, runSourceCommand(m.repoRoot, "Add source", "defaults", "add", source.Name)
 	case "n":
 		m.sourceInput = ""
+		m.sourceNameInput = ""
+		m.sourceField = 0
 		m.viewMode = viewAddSource
 		m.status = "Enter a source path or git URL."
 		return m, nil
@@ -1314,21 +1360,47 @@ func (m model) View() string {
 	}
 
 	contentWidth := m.contentWidth()
-	parts := []string{
-		m.renderHeader(contentWidth),
-		m.renderNavigation(contentWidth),
-		m.renderBody(contentWidth),
-		statusStyle.Width(contentWidth).Render(m.status),
-		helpStyle.Width(contentWidth).Render(m.helpText()),
-	}
+	header := m.renderHeader(contentWidth)
+	navigation := m.renderNavigation(contentWidth)
+	status := statusStyle.Width(contentWidth).Render(m.status)
+	help := helpStyle.Width(contentWidth).Render(m.helpText())
 
-	return appStyle.Width(contentWidth).Render(lipgloss.JoinVertical(lipgloss.Left, parts...))
+	bodyModel := m
+	if m.height > 0 {
+		innerHeight := m.height - appStyle.GetPaddingTop() - appStyle.GetPaddingBottom()
+		if innerHeight < 1 {
+			innerHeight = 1
+		}
+		reservedHeight := lipgloss.Height(header) + lipgloss.Height(navigation) + lipgloss.Height(status) + lipgloss.Height(help)
+		bodyModel.bodyHeight = innerHeight - reservedHeight
+		if bodyModel.bodyHeight < 0 {
+			bodyModel.bodyHeight = 0
+		}
+	}
+	body := bodyModel.renderBody(contentWidth)
+
+	parts := []string{
+		header,
+		navigation,
+	}
+	if bodyModel.bodyHeight != 0 || m.height <= 0 {
+		parts = append(parts, body)
+	}
+	parts = append(parts, status, help)
+
+	rendered := appStyle.Width(contentWidth).Render(lipgloss.JoinVertical(lipgloss.Left, parts...))
+	if m.height > 0 && lipgloss.Height(rendered) > m.height {
+		rendered = lipgloss.NewStyle().MaxHeight(m.height).Render(rendered)
+	}
+	return rendered
 }
 
 func (m model) renderHeader(width int) string {
-	search := emptyLabel(m.search, "none")
+	search := subtleStyle.Render("none")
 	if m.searchMode {
-		search = m.search + "_"
+		search = searchBadgeStyle.Render(m.search + "_")
+	} else if strings.TrimSpace(m.search) != "" {
+		search = searchBadgeStyle.Render(m.search)
 	}
 
 	title := titleStyle.Render("Skillhub")
@@ -1379,55 +1451,55 @@ func (m model) renderNavigation(width int) string {
 
 func (m model) renderBody(width int) string {
 	if m.loading {
-		return panel(sectionTitle(m.dashboardSection()), statusStyle.Render(m.status), width)
+		return m.renderPanel(sectionTitle(m.dashboardSection()), statusStyle.Render(m.status), width)
 	}
 	if m.viewMode == viewHelp {
-		return panel("Help", m.helpContent(width-6), width)
+		return m.renderPanel("Help", m.helpContent(width-6), width)
 	}
 	if m.viewMode == viewAddSource {
-		return panel("Add source", m.addSourceContent(width-6), width)
+		return m.renderPanel("Add source", m.addSourceContent(width-6), width)
 	}
 	if m.viewMode == viewConfirmDelete {
-		return panel("Confirm uninstall", m.confirmDeleteContent(width-6), width)
+		return m.renderPanel("Confirm uninstall", m.confirmDeleteContent(width-6), width)
 	}
 	if m.viewMode == viewDetails {
-		return panel("Skill details", m.detailsContent(width-6), width)
+		return m.renderPanel("Skill details", m.detailsContent(width-6), width)
 	}
 	if m.viewMode == viewInstalledDetails {
-		return panel("Installed skill details", m.installedDetailsContent(width-6), width)
+		return m.renderPanel("Installed skill details", m.installedDetailsContent(width-6), width)
 	}
 	if m.viewMode == viewUsageDetails {
-		return panel("Usage details", m.usageDetailsContent(width-6), width)
+		return m.renderPanel("Usage details", m.usageDetailsContent(width-6), width)
 	}
 	if m.viewMode == viewInstallResult {
-		return panel("Install complete", m.installResultContent(width-6), width)
+		return m.renderPanel("Install complete", m.installResultContent(width-6), width)
 	}
 	if m.viewMode == viewTargets {
-		return panel(m.targetsPanelTitle(), m.targetsContent(width-6), width)
+		return m.renderPanel(m.targetsPanelTitle(), m.targetsContent(width-6), width)
 	}
 	if m.viewMode == viewInstalled {
-		return panel("Installed skills", m.installedContent(width-6), width)
+		return m.renderPanel("Installed skills", m.installedContent(width-6), width)
 	}
 	if m.viewMode == viewUsage {
-		return panel("Usage", m.usageContent(width-6), width)
+		return m.renderPanel("Usage", m.usageContent(width-6), width)
 	}
 	if m.viewMode == viewSources {
-		return panel("Sources", m.sourcesContent(width-6), width)
+		return m.renderPanel("Sources", m.sourcesContent(width-6), width)
 	}
 	if m.viewMode == viewUpdate {
-		return panel("Update", m.updateContent(width-6), width)
+		return m.renderPanel("Update", m.updateContent(width-6), width)
 	}
 	if m.viewMode == viewDefaults {
-		return panel("Source presets", m.defaultsContent(width-6), width)
+		return m.renderPanel("Source presets", m.defaultsContent(width-6), width)
 	}
 	if m.noSources {
-		return panel("Sources", "No sources configured.\n\nPress d for presets or n for a custom source.", width)
+		return m.renderPanel("Sources", "No sources configured.\n\nPress d for presets or n for a custom source.", width)
 	}
 	if len(m.filtered) == 0 {
-		return panel("Skills", "No skills matched.", width)
+		return m.renderPanel("Skills", "No skills matched.", width)
 	}
 
-	return panel("Skills", m.skillsContent(width-6), width)
+	return m.renderPanel("Skills", m.skillsContent(width-6), width)
 }
 
 func (m model) skillsContent(width int) string {
@@ -1949,13 +2021,19 @@ func (m model) helpContent(width int) string {
 
 func (m model) addSourceContent(width int) string {
 	input := m.sourceInput
-	if strings.TrimSpace(input) == "" {
-		input = "path or git URL"
+	nameInput := m.sourceNameInput
+	locationCursor := ""
+	nameCursor := ""
+	if m.sourceField == 1 {
+		nameCursor = "_"
+	} else {
+		locationCursor = "_"
 	}
 	return strings.Join([]string{
-		labelLine("Location", input+"_"),
+		labelLine("Location", input+locationCursor),
+		labelLine("Name", nameInput+nameCursor),
 		"",
-		wrapText("Name defaults to the path or repository basename. Use CLI flags for custom name, type, ref, or catalog.", width),
+		wrapText("Location expects a local path or git URL, for example https://github.com/mattpocock/skills. Name is optional; use a short id such as mattpocock for generic repository names. Tab switches fields.", width),
 	}, "\n")
 }
 
@@ -1995,7 +2073,7 @@ func (m model) helpText() string {
 		return "j/k move  enter add preset  n add custom  esc back  q quit"
 	}
 	if m.viewMode == viewAddSource {
-		return "enter add  esc back  ctrl+c quit"
+		return "tab field  enter add  esc back  ctrl+c quit"
 	}
 	if m.viewMode == viewDetails {
 		return "space select  i targets  enter/esc back  q quit"
@@ -2040,7 +2118,15 @@ func (m model) targetsPanelTitle() string {
 	return "Targets"
 }
 
+func (m model) renderPanel(title, body string, width int) string {
+	return panelWithMaxHeight(title, body, width, m.bodyHeight)
+}
+
 func panel(title, body string, width int) string {
+	return panelWithMaxHeight(title, body, width, 0)
+}
+
+func panelWithMaxHeight(title, body string, width int, maxHeight int) string {
 	if width < 24 {
 		width = 24
 	}
@@ -2048,8 +2134,37 @@ func panel(title, body string, width int) string {
 	if contentWidth < 10 {
 		contentWidth = 10
 	}
+	if maxHeight > 0 {
+		bodyBudget := maxHeight - panelChromeHeight()
+		if bodyBudget < 0 {
+			bodyBudget = 0
+		}
+		body = limitLines(body, bodyBudget)
+	}
 	content := lipgloss.JoinVertical(lipgloss.Left, panelTitleStyle.Render(title), "", body)
-	return panelStyle.Width(contentWidth).Render(content)
+	rendered := panelStyle.Width(contentWidth).Render(content)
+	if maxHeight > 0 && lipgloss.Height(rendered) > maxHeight {
+		rendered = lipgloss.NewStyle().MaxHeight(maxHeight).Render(rendered)
+	}
+	return rendered
+}
+
+func panelChromeHeight() int {
+	return 6
+}
+
+func limitLines(value string, maxLines int) string {
+	if maxLines < 0 {
+		maxLines = 0
+	}
+	if maxLines == 0 || strings.TrimSpace(value) == "" {
+		return ""
+	}
+	lines := strings.Split(value, "\n")
+	if len(lines) <= maxLines {
+		return value
+	}
+	return strings.Join(lines[:maxLines], "\n")
 }
 
 func (m *model) applyFilter() {
@@ -2961,12 +3076,12 @@ func callerCwd() string {
 
 func loadSkills(repoRoot string) tea.Cmd {
 	return func() tea.Msg {
-		output, err := runScript(repoRoot, "scripts/skills.sh", "list", "--tsv")
+		output, stderr, err := runScriptOutput(repoRoot, "scripts/skills.sh", "list", "--tsv")
 		if err != nil {
-			return skillsLoadedMsg{err: commandError(err, output)}
+			return skillsLoadedMsg{err: commandError(err, output+stderr)}
 		}
 		skills, err := parseSkillsTSV(output)
-		return skillsLoadedMsg{skills: skills, err: err}
+		return skillsLoadedMsg{skills: skills, warning: stderr, err: err}
 	}
 }
 
@@ -3356,18 +3471,58 @@ func installArgsForTargetChoice(choice InstallTargetChoice, projectDir string, n
 	return append(args, names...)
 }
 
+func normalizeBracketedInput(input string) string {
+	value := strings.TrimSpace(input)
+	if strings.HasPrefix(value, "[") && strings.HasSuffix(value, ")") {
+		if close := strings.Index(value, "]("); close > 0 {
+			value = value[close+2 : len(value)-1]
+			value = strings.TrimSpace(value)
+		}
+	}
+	if len(value) >= 2 {
+		first := value[0]
+		last := value[len(value)-1]
+		if (first == '[' && last == ']') || (first == '<' && last == '>') {
+			value = strings.TrimSpace(value[1 : len(value)-1])
+		}
+	}
+	return value
+}
+
+func normalizeSourceLocationInput(input string) string {
+	return normalizeBracketedInput(input)
+}
+
+func normalizeSourceNameInput(input string) string {
+	return normalizeBracketedInput(input)
+}
+
+func sourceAddArgs(locationInput, nameInput string) []string {
+	args := []string{"add", normalizeSourceLocationInput(locationInput)}
+	name := normalizeSourceNameInput(nameInput)
+	if name != "" {
+		args = append(args, "--name", name)
+	}
+	return args
+}
+
 func runScript(repoRoot, script string, args ...string) (string, error) {
+	stdout, stderr, err := runScriptOutput(repoRoot, script, args...)
+	return stdout + stderr, err
+}
+
+func runScriptOutput(repoRoot, script string, args ...string) (string, string, error) {
 	cmd := exec.Command("sh", append([]string{filepath.Join(repoRoot, script)}, args...)...)
 	cmd.Dir = repoRoot
 	cmd.Env = os.Environ()
 	if os.Getenv("SKILLHUB_CALLER_CWD") == "" {
 		cmd.Env = append(cmd.Env, "SKILLHUB_CALLER_CWD="+callerCwd())
 	}
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 	err := cmd.Run()
-	return out.String(), err
+	return stdout.String(), stderr.String(), err
 }
 
 func parseSkillsTSV(input string) ([]Skill, error) {

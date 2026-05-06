@@ -58,12 +58,26 @@ validate_path_source_or_exit() {
   fi
 
   abs_location=$(CDPATH= cd -- "$location" && pwd)
-  if [ ! -f "$abs_location/$catalog" ]; then
+  if [ ! -f "$abs_location/$catalog" ] && ! skillhub_source_has_discoverable_skills "$abs_location"; then
     printf 'Path source %s is missing catalog: %s\n' "$name" "$abs_location/$catalog" >&2
     exit 1
   fi
 
   printf '%s\n' "$abs_location"
+}
+
+sync_source_for_catalog_or_exit() {
+  name="$1"
+  type="$2"
+  location="$3"
+  ref="$4"
+  catalog="$5"
+
+  source_path=$(skillhub_sync_catalog_source "$name" "$type" "$location" "$ref" "$catalog")
+  if [ ! -f "$source_path/$catalog" ]; then
+    printf 'Source %s is missing catalog: %s\n' "$name" "$source_path/$catalog" >&2
+    exit 1
+  fi
 }
 
 case "$cmd" in
@@ -119,7 +133,7 @@ case "$cmd" in
       if [ -n "$wanted" ] && [ "$name" != "$wanted" ]; then
         continue
       fi
-      source_path=$(skillhub_sync_source "$name" "$type" "$location" "$ref")
+      source_path=$(skillhub_sync_catalog_source "$name" "$type" "$location" "$ref" "$catalog")
       printf 'Synced %s to %s\n' "$name" "$source_path"
       synced=$((synced + 1))
     done < "$sources_file"
@@ -183,6 +197,11 @@ case "$cmd" in
           printf 'Source already exists: %s\n' "$name" >&2
           exit 1
         fi
+        while IFS='	' read -r row_name row_type row_location row_ref row_catalog row_extra; do
+          sync_source_for_catalog_or_exit "$row_name" "$row_type" "$row_location" "$row_ref" "$row_catalog"
+        done <<EOF
+$source_row
+EOF
         skillhub_ensure_user_sources_file
         user_file=$(skillhub_user_sources_file)
         printf '%s\n' "$source_row" >> "$user_file"
@@ -294,6 +313,8 @@ case "$cmd" in
       exit 1
     fi
 
+    sync_source_for_catalog_or_exit "$name" "$type" "$location" "$ref" "$catalog"
+
     skillhub_ensure_user_sources_file
     user_file=$(skillhub_user_sources_file)
     printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$type" "$location" "$ref" "$catalog" >> "$user_file"
@@ -316,6 +337,7 @@ case "$cmd" in
     tmp_file=$(mktemp "${TMPDIR:-/tmp}/skillhub-user-sources.XXXXXX")
     awk -F '	' -v wanted="$name" 'NR == 1 || $1 != wanted { print }' "$user_file" > "$tmp_file"
     mv "$tmp_file" "$user_file"
+    skillhub_clear_source_cache "$name"
     printf 'Removed source %s from %s\n' "$name" "$user_file"
     ;;
   -h|--help|help)

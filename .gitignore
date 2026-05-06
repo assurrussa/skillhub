@@ -4,3 +4,10 @@
 
 plans
 tmp
+
+# >>> skillhub local metadata >>>
+skills/**/.skillhub.json
+skills/.skillhub-*/
+.*/skills/**/.skillhub.json
+.*/skills/.skillhub-*/
+# <<< skillhub local metadata <<<

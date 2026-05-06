@@ -4,8 +4,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -15,6 +17,66 @@ var ansiRE = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
 func stripANSI(value string) string {
 	return ansiRE.ReplaceAllString(value, "")
+}
+
+func testRepoRoot(t *testing.T) string {
+	t.Helper()
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("resolve repo root: %v", err)
+	}
+	return root
+}
+
+func writeTUIGitSourceConfig(t *testing.T, configDir, cacheDir, name string, syncedAt time.Time) {
+	t.Helper()
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config: %v", err)
+	}
+	sources := "name\ttype\tlocation\tref\tcatalog\n" +
+		name + "\tgit\t" + filepath.Join(configDir, "missing-remote") + "\tmain\tcatalog/skills.tsv\n"
+	if err := os.WriteFile(filepath.Join(configDir, "sources.tsv"), []byte(sources), 0o644); err != nil {
+		t.Fatalf("write sources: %v", err)
+	}
+
+	catalogDir := filepath.Join(cacheDir, "sources", name, "catalog")
+	if err := os.MkdirAll(catalogDir, 0o755); err != nil {
+		t.Fatalf("mkdir catalog: %v", err)
+	}
+	catalog := "name\tcategory\ttriggers\tdescription\n" +
+		"go-project-rules\tgo\tgo,golang,go.mod\tGo rules\n"
+	if err := os.WriteFile(filepath.Join(catalogDir, "skills.tsv"), []byte(catalog), 0o644); err != nil {
+		t.Fatalf("write catalog: %v", err)
+	}
+
+	stateDir := filepath.Join(cacheDir, "source-state")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir source state: %v", err)
+	}
+	state := strconv.FormatInt(syncedAt.Unix(), 10) + "\n"
+	if err := os.WriteFile(filepath.Join(stateDir, name+".synced_at"), []byte(state), 0o644); err != nil {
+		t.Fatalf("write source state: %v", err)
+	}
+}
+
+func writeTUINestedPathSource(t *testing.T, configDir, sourceDir string) {
+	t.Helper()
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config: %v", err)
+	}
+	sources := "name\ttype\tlocation\tref\tcatalog\n" +
+		"nested\tpath\t" + sourceDir + "\t-\tcatalog/skills.tsv\n"
+	if err := os.WriteFile(filepath.Join(configDir, "sources.tsv"), []byte(sources), 0o644); err != nil {
+		t.Fatalf("write sources: %v", err)
+	}
+	skillDir := filepath.Join(sourceDir, "skills", "engineering", "tdd")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("mkdir nested skill: %v", err)
+	}
+	content := "---\nname: tdd\ndescription: Test-driven development\n---\n\n# TDD\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write nested skill: %v", err)
+	}
 }
 
 func TestParseSkillsTSV(t *testing.T) {
@@ -30,6 +92,74 @@ func TestParseSkillsTSV(t *testing.T) {
 	}
 	if skills[0].Name != "go-project-rules" || skills[0].Category != "go" {
 		t.Fatalf("unexpected skill: %#v", skills[0])
+	}
+}
+
+func TestLoadSkillsUsesCachedCatalog(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	writeTUIGitSourceConfig(t, configDir, cacheDir, "cached", time.Now())
+	t.Setenv("SKILLHUB_CONFIG_DIR", configDir)
+	t.Setenv("SKILLHUB_CACHE_DIR", cacheDir)
+
+	msg := loadSkills(testRepoRoot(t))()
+	loaded, ok := msg.(skillsLoadedMsg)
+	if !ok {
+		t.Fatalf("expected skillsLoadedMsg, got %T", msg)
+	}
+	if loaded.err != nil {
+		t.Fatalf("loadSkills returned error: %v", loaded.err)
+	}
+	if len(loaded.skills) != 1 || loaded.skills[0].Name != "go-project-rules" {
+		t.Fatalf("unexpected loaded skills: %#v", loaded.skills)
+	}
+}
+
+func TestLoadSkillsShowsStaleCacheWarningInStatus(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	writeTUIGitSourceConfig(t, configDir, cacheDir, "cached", time.Now().Add(-11*time.Minute))
+	t.Setenv("SKILLHUB_CONFIG_DIR", configDir)
+	t.Setenv("SKILLHUB_CACHE_DIR", cacheDir)
+
+	msg := loadSkills(testRepoRoot(t))()
+	loaded, ok := msg.(skillsLoadedMsg)
+	if !ok {
+		t.Fatalf("expected skillsLoadedMsg, got %T", msg)
+	}
+	if loaded.err != nil {
+		t.Fatalf("loadSkills should use stale cache: %v", loaded.err)
+	}
+
+	m := initialModel(testRepoRoot(t))
+	updated, _ := m.Update(loaded)
+	m = updated.(model)
+	if !strings.Contains(m.status, "stale cache") {
+		t.Fatalf("expected stale cache warning in status, got %q", m.status)
+	}
+}
+
+func TestLoadSkillsUsesGeneratedNestedCatalog(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	sourceDir := filepath.Join(tmp, "source")
+	writeTUINestedPathSource(t, configDir, sourceDir)
+	t.Setenv("SKILLHUB_CONFIG_DIR", configDir)
+	t.Setenv("SKILLHUB_CACHE_DIR", cacheDir)
+
+	msg := loadSkills(testRepoRoot(t))()
+	loaded, ok := msg.(skillsLoadedMsg)
+	if !ok {
+		t.Fatalf("expected skillsLoadedMsg, got %T", msg)
+	}
+	if loaded.err != nil {
+		t.Fatalf("loadSkills returned error: %v", loaded.err)
+	}
+	if len(loaded.skills) != 1 || loaded.skills[0].Name != "engineering_tdd" || loaded.skills[0].Category != "engineering" {
+		t.Fatalf("unexpected generated nested skills: %#v", loaded.skills)
 	}
 }
 
@@ -692,6 +822,64 @@ func TestAddSourceInputAcceptsDashboardShortcutDigits(t *testing.T) {
 	}
 }
 
+func TestAddSourceArgsNormalizeBracketedURLAndName(t *testing.T) {
+	args := sourceAddArgs("[https://github.com/mattpocock/skills]", "[mattpocock]")
+	want := []string{"add", "https://github.com/mattpocock/skills", "--name", "mattpocock"}
+	if strings.Join(args, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("unexpected add source args: got %#v want %#v", args, want)
+	}
+
+	args = sourceAddArgs("[Skill repo](https://github.com/mattpocock/skills)", "")
+	want = []string{"add", "https://github.com/mattpocock/skills"}
+	if strings.Join(args, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("unexpected markdown-link add source args: got %#v want %#v", args, want)
+	}
+
+	args = sourceAddArgs("<https://github.com/mattpocock/skills>", "<mattpocock>")
+	want = []string{"add", "https://github.com/mattpocock/skills", "--name", "mattpocock"}
+	if strings.Join(args, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("unexpected angle-bracket add source args: got %#v want %#v", args, want)
+	}
+}
+
+func TestAddSourceEmptyFieldsDoNotLookPreFilled(t *testing.T) {
+	m := initialModel(".")
+	m.loading = false
+	m.viewMode = viewAddSource
+	m.width = 120
+
+	view := stripANSI(m.addSourceContent(90))
+	if strings.Contains(view, "Location path or git URL") || strings.Contains(view, "Name optional source name") {
+		t.Fatalf("empty fields should not render placeholder text as field values, got:\n%s", view)
+	}
+	if !strings.Contains(view, "Location  _") {
+		t.Fatalf("expected empty active location field to show only cursor, got:\n%s", view)
+	}
+	if !strings.Contains(view, "Location expects a local path or git URL") {
+		t.Fatalf("expected field help to explain source location, got:\n%s", view)
+	}
+}
+
+func TestAddSourceInputCapturesOptionalNameField(t *testing.T) {
+	m := initialModel(".")
+	m.loading = false
+	m.viewMode = viewAddSource
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("https://github.com/mattpocock/skills")})
+	m = updated.(model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = updated.(model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("mattpocock")})
+	m = updated.(model)
+
+	if m.sourceInput != "https://github.com/mattpocock/skills" {
+		t.Fatalf("expected source location input to be captured, got %q", m.sourceInput)
+	}
+	if m.sourceNameInput != "mattpocock" {
+		t.Fatalf("expected source name input to be captured, got %q", m.sourceNameInput)
+	}
+}
+
 func TestInstalledCommandSummarySurvivesReload(t *testing.T) {
 	m := initialModel(".")
 	m.loading = false
@@ -771,6 +959,48 @@ func TestLeftRightSwitchDashboardSections(t *testing.T) {
 	}
 }
 
+func TestLeavingSkillsClearsSearch(t *testing.T) {
+	m := initialModel(".")
+	m.loading = false
+	m.viewMode = viewSkills
+	m.skills = []Skill{
+		{Source: "agent-rules", Name: "go-project-rules", Category: "go", Triggers: "go,golang", Description: "Go rules"},
+		{Source: "mattpocock", Name: "productivity_grill-me", Category: "productivity", Triggers: "grill", Description: "Grill me"},
+	}
+	m.search = "grill"
+	m.applyFilter()
+	if len(m.filtered) != 1 {
+		t.Fatalf("expected search to filter skills before navigation, got %d", len(m.filtered))
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m = updated.(model)
+	if m.search != "" || m.searchMode {
+		t.Fatalf("expected skill search to reset when leaving Skills, got search=%q mode=%v", m.search, m.searchMode)
+	}
+	if len(m.filtered) != 2 {
+		t.Fatalf("expected skill list filter to reset, got %d", len(m.filtered))
+	}
+}
+
+func TestHeaderHighlightsActiveSearch(t *testing.T) {
+	m := initialModel(".")
+	m.loading = false
+	m.width = 120
+	m.search = "grill"
+
+	view := m.renderHeader(120)
+	if !strings.Contains(view, "Search: ") || !strings.Contains(view, "grill") {
+		t.Fatalf("expected header to show active search, got:\n%s", stripANSI(view))
+	}
+	if got := searchBadgeStyle.GetBackground(); got != lipgloss.Color("63") {
+		t.Fatalf("expected active search badge background, got %#v", got)
+	}
+	if got := searchBadgeStyle.GetBold(); !got {
+		t.Fatalf("expected active search badge to be bold")
+	}
+}
+
 func TestLeftRightDoesNotLeaveInstallTargetPicker(t *testing.T) {
 	m := initialModel(".")
 	m.loading = false
@@ -828,6 +1058,47 @@ func TestViewGroupsSkillsByCategoryTree(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected grouped tree view to contain %q, got:\n%s", want, view)
 		}
+	}
+}
+
+func TestSmallHeightViewKeepsDashboardHeaderVisible(t *testing.T) {
+	m := initialModel(".")
+	m.loading = false
+	m.width = 120
+	m.height = 18
+	m.skills = []Skill{
+		{
+			Source:      "agent-rules",
+			Name:        "reusable-module-rules",
+			Category:    "architecture",
+			Triggers:    "reusable module,library,public surface,external consumer,release readiness,replace",
+			Description: "Global reusable-module rules for public facades, supported import surfaces, clean consumer probes, and host/library ownership.",
+		},
+		{
+			Source:      "mattpocock",
+			Name:        "deprecated_design-an-interface",
+			Category:    "deprecated",
+			Triggers:    "deprecated,design-an-interface",
+			Description: "Generate multiple radically different interface designs for a module using parallel sub-agents. Use when user wants to design an API, explore interface options, compare module shapes, or mentions design it twice.",
+		},
+		{
+			Source:      "mattpocock",
+			Name:        "deprecated_qa",
+			Category:    "deprecated",
+			Triggers:    "deprecated,qa",
+			Description: "Interactive QA session where user reports bugs or issues conversationally, and the agent files GitHub issues. Explores the codebase in the background for context and domain language.",
+		},
+	}
+	m.applyFilter()
+
+	view := stripANSI(m.View())
+	for _, want := range []string{"Skillhub", "Sources: 2", "1 Skills", "2 Installed", "6 Update"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected small-height view to keep dashboard text %q visible, got:\n%s", want, view)
+		}
+	}
+	if got := lipgloss.Height(view); got > m.height {
+		t.Fatalf("expected rendered view to fit height %d, got %d lines:\n%s", m.height, got, view)
 	}
 }
 

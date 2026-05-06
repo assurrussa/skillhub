@@ -85,6 +85,36 @@ skillhub sources defaults add agent-rules
 skillhub sources list
 ```
 
+Git sources are cached under `${SKILLHUB_CACHE_DIR:-$HOME/.cache/skillhub}`.
+Catalog commands (`skills list/search`, `recommend`, ordinary `install`, and
+the TUI Skills screen) read from that local cache and refresh a git source only
+when the last successful sync is older than 10 minutes or the cache is missing.
+If a refresh fails but a cached catalog exists, Skillhub keeps working from the
+stale cache and prints a warning. Use `skillhub sources sync [source]` whenever
+you need an immediate forced refresh.
+
+Sources can either provide a native `catalog/skills.tsv` plus flat
+`skills/<name>/SKILL.md` directories, a nested `skills/**/SKILL.md` tree, or
+root-level `<name>/SKILL.md` directories. Cataloged sources are used as-is.
+Catalog-less sources are materialized into an internal flat cache with names
+built from the path:
+
+```text
+skills/engineering/tdd/SKILL.md -> engineering_tdd
+skills/productivity/grill-me/SKILL.md -> productivity_grill-me
+tdd/SKILL.md -> tdd
+```
+
+That makes external skill collections installable through the same commands:
+
+```sh
+skillhub sources add https://github.com/mattpocock/skills --name mattpocock
+skillhub search tdd
+skillhub install mattpocock/engineering_tdd --target codex --scope global
+# Nested collections still get path-prefixed names:
+skillhub install some-source/engineering_tdd --target claude --scope project
+```
+
 For local development, point the source at a checkout instead of cloning:
 
 ```sh
@@ -101,6 +131,7 @@ skillhub sources sync agent-rules
 skillhub sources defaults list
 skillhub sources defaults add agent-rules
 skillhub sources add ../agent-rules --name local-agent-rules
+skillhub sources add https://github.com/mattpocock/skills --name mattpocock
 skillhub sources remove local-agent-rules
 skillhub targets list
 skillhub targets detect
@@ -188,9 +219,12 @@ project root, or install path. Press `u` to update the highlighted skill or
 location, and `U` to update all visible recorded project-scope installs.
 
 The Sources section shows active sources, recommended presets, custom source
-entry, and source sync. The Update section intentionally does not run
-self-update from inside the TUI; it shows the exact CLI commands for `skillhub
-update`, cascade update, and managed skill update.
+entry, and source sync. The Skills screen uses the local source cache and a
+10-minute git-source TTL, so opening the catalog does not block on network on
+every visit; press `s` in Sources when you want an immediate refresh. The
+Update section intentionally does not run self-update from inside the TUI; it
+shows the exact CLI commands for `skillhub update`, cascade update, and managed
+skill update.
 
 Update `skillhub` itself without reinstalling skills:
 
@@ -212,7 +246,8 @@ skillhub update --cascade -v
 Cascade update first updates the `skillhub` command, then updates managed
 installed skills across supported global targets and project targets for the
 current directory, then updates all recorded project-scope installs from the
-managed usage registry. It only touches skill directories with `.skillhub.json`.
+managed usage registry. It only touches Skillhub-managed skill directories:
+sidecar-backed global/custom installs and registry-backed project installs.
 Use `-v` or `--verbose` to print per-skill target, hash, and result details.
 
 Sources are stored outside the installed checkout:
@@ -263,13 +298,15 @@ Supported v1 targets:
 Other assistants are listed as planned targets so the CLI and future TUI can
 show the roadmap without writing into unverified formats.
 
-Successful installs write metadata to the installed skill directory:
+Global and custom-directory installs write sidecar metadata to the installed
+skill directory:
 
 ```text
 <target-root>/<skill-name>/.skillhub.json
 ```
 
-Managed install usage is also recorded in user config:
+Project-scope installs do not write machine-local metadata inside the project.
+Their update metadata lives only in the user config registry:
 
 ```text
 ${XDG_CONFIG_HOME:-$HOME/.config}/skillhub/installed.tsv
@@ -278,7 +315,9 @@ ${XDG_CONFIG_HOME:-$HOME/.config}/skillhub/installed.tsv
 The registry tracks Skillhub-managed installs created or updated by this
 version. Project-scope rows include the resolved project path; global and
 custom directory rows use `project_path=-`. It is not an import index for old
-manual installs.
+manual installs. Project skill content such as `SKILL.md`, references, and docs
+can be committed normally; Skillhub adds a small `.gitignore` block for old
+`.skillhub.json` files and temporary update directories.
 
 Inspect installed skills without modifying them:
 
@@ -307,10 +346,11 @@ skillhub installed usage update --projects rules-selector -v
 skillhub installed usage update --projects --target codex --project /path/to/project agent-rules/go-project-rules
 ```
 
-`installed update` syncs the source recorded in `.skillhub.json`, compares the
-installed skill hash with the current source skill, and rewrites only changed
-managed skills. If the source or catalog entry is missing, the skill is skipped
-and left installed.
+`installed update` syncs the source recorded in sidecar metadata for
+global/custom installs or in the central registry for project installs, compares
+the installed skill hash with the current source skill, and rewrites only
+changed managed skills. If the source or catalog entry is missing, the skill is
+skipped and left installed.
 
 `installed usage update --projects` updates only project-scope installs recorded
 in `installed.tsv`. Use `--target` and `--project` to narrow the recorded rows
@@ -341,13 +381,14 @@ skillhub installed uninstall rules-selector --target claude --scope project --pr
 skillhub installed uninstall rules-selector --target directory --dir /tmp/skills
 ```
 
-By default uninstall removes only Skillhub-managed directories that contain
-`.skillhub.json`. Use `--force` only when intentionally removing an unmanaged
-skill directory that still contains `SKILL.md`.
+By default uninstall removes only Skillhub-managed directories, either from
+sidecar metadata or from the central registry. Use `--force` only when
+intentionally removing an unmanaged skill directory that still contains
+`SKILL.md`.
 
 `targets detect` reports whether each supported target path exists, how many
 `SKILL.md` directories it contains, and how many of those are managed by
-Skillhub metadata.
+Skillhub metadata or registry rows.
 
 Project-scope installs use the caller working directory unless `--project` is
 provided:

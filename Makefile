@@ -40,7 +40,13 @@ smoke-temp:
 	tmp=$$(mktemp -d); \
 	project="$$tmp/project"; \
 	project_b="$$tmp/project-b"; \
-	mkdir -p "$$project" "$$project_b"; \
+	mkdir -p "$$project/docs" "$$project/pkg" "$$project/cmd/service" "$$project_b"; \
+	printf 'module example.com/project\n\ngo 1.26.0\n' > "$$project/go.mod"; \
+	printf 'go 1.26.0\n\nuse .\n' > "$$project/go.work"; \
+	printf '# Temp Go service\n\nOpenAPI contracts and architecture docs.\n' > "$$project/README.md"; \
+	printf 'openapi: 3.0.0\ninfo:\n  title: API\n  version: v1\n' > "$$project/docs/openapi.yaml"; \
+	printf 'package pkg\n' > "$$project/pkg/public.go"; \
+	printf 'package main\nfunc main() {}\n' > "$$project/cmd/service/main.go"; \
 	printf 'Using temp dir: %s\n' "$$tmp"; \
 	SKILLHUB_CONFIG_DIR="$$tmp/config" \
 	SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" \
@@ -70,9 +76,17 @@ smoke-temp:
 		printf '%s\n' "$$usage_update_output"; \
 		printf '%s\n' "$$usage_update_output" | grep 'Checking codex/project rules-selector'; \
 		printf '%s\n' "$$usage_update_output" | grep 'Checking claude/project rules-selector'; \
+		targeted_usage_output=$$(SKILLHUB_CONFIG_DIR="$$tmp/config" SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" $(SKILLHUB) installed usage update --projects --target codex --project "$$project" rules-selector -v); \
+		printf '%s\n' "$$targeted_usage_output"; \
+		printf '%s\n' "$$targeted_usage_output" | grep 'Checking codex/project rules-selector'; \
+		! printf '%s\n' "$$targeted_usage_output" | grep 'Checking claude/project rules-selector'; \
 		SKILLHUB_CONFIG_DIR="$$tmp/config" \
 		SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" \
 		$(SKILLHUB) recommend --project "$$project"; \
+		recommend_output=$$(SKILLHUB_CONFIG_DIR="$$tmp/config" SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" $(SKILLHUB) recommend --project "$$project" --tsv); \
+		printf '%s\n' "$$recommend_output"; \
+		printf '%s\n' "$$recommend_output" | grep '^agent-rules	go-project-rules	'; \
+		printf '%s\n' "$$recommend_output" | grep '^agent-rules	docs-project-rules	'; \
 		SKILLHUB_CONFIG_DIR="$$tmp/config" \
 		$(SKILLHUB) installed list --target directory --dir "$$tmp/skills"; \
 	SKILLHUB_CONFIG_DIR="$$tmp/config" \

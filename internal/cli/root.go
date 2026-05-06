@@ -372,6 +372,8 @@ func installedUsageCommand() *cobra.Command {
 func installedUsageUpdateCommand() *cobra.Command {
 	var projects bool
 	var verbose bool
+	var target string
+	var project string
 	cmd := &cobra.Command{
 		Use:   "update [[<source>/]<skill>...]",
 		Short: "Update managed project-scope skills recorded in usage registry",
@@ -385,6 +387,12 @@ func installedUsageUpdateCommand() *cobra.Command {
 			if projects {
 				scriptArgs = append(scriptArgs, "--projects")
 			}
+			if cmd.Flags().Changed("target") {
+				scriptArgs = append(scriptArgs, "--target", target)
+			}
+			if cmd.Flags().Changed("project") {
+				scriptArgs = append(scriptArgs, "--project", project)
+			}
 			scriptArgs = append(scriptArgs, args...)
 			if verbose {
 				scriptArgs = append(scriptArgs, "--verbose")
@@ -393,6 +401,8 @@ func installedUsageUpdateCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&projects, "projects", false, "update project-scope installs recorded in usage registry")
+	cmd.Flags().StringVar(&target, "target", "", "limit project usage update to a recorded target")
+	cmd.Flags().StringVar(&project, "project", "", "limit project usage update to a recorded project path")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "print per-skill update details")
 	return cmd
 }

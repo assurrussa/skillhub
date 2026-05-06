@@ -163,6 +163,8 @@ type model struct {
 	searchMode            bool
 	usageFilterMode       bool
 	loading               bool
+	loadingSkills         bool
+	loadingInstalled      bool
 	busy                  bool
 	noSources             bool
 	status                string
@@ -301,11 +303,13 @@ func Run(repoRoot string) error {
 
 func initialModel(repoRoot string) model {
 	return model{
-		repoRoot: repoRoot,
-		selected: map[string]bool{},
-		loading:  true,
-		status:   "Loading catalog...",
-		viewMode: viewSkills,
+		repoRoot:         repoRoot,
+		selected:         map[string]bool{},
+		loading:          true,
+		loadingSkills:    true,
+		loadingInstalled: true,
+		status:           "Loading installed skills...",
+		viewMode:         viewInstalled,
 
 		installScope:    "global",
 		projectDir:      callerCwd(),
@@ -314,7 +318,7 @@ func initialModel(repoRoot string) model {
 }
 
 func (m model) Init() tea.Cmd {
-	return loadSkills(m.repoRoot)
+	return tea.Batch(loadInstalled(m.repoRoot), loadSkills(m.repoRoot))
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -328,24 +332,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ensureTargetCursorVisible()
 		return m, nil
 	case skillsLoadedMsg:
-		m.loading = false
+		m.loadingSkills = false
+		m.loading = m.currentViewLoading()
+		showStatus := m.dashboardSection() == viewSkills
 		if msg.err != nil {
 			if isNoSourcesError(msg.err) {
 				m.skills = nil
 				m.filtered = nil
 				m.noSources = true
-				m.status = "No sources configured. Press d for presets or n for a custom source."
+				if showStatus {
+					m.status = "No sources configured. Press d for presets or n for a custom source."
+				}
 				return m, nil
 			}
-			m.status = "Load failed: " + msg.err.Error()
+			if showStatus {
+				m.status = "Load failed: " + msg.err.Error()
+			}
 			return m, nil
 		}
 		m.noSources = false
 		m.skills = msg.skills
 		m.applyFilter()
-		m.status = fmt.Sprintf("Loaded %d skill(s).", len(m.skills))
-		if strings.TrimSpace(msg.warning) != "" {
-			m.status += " " + compactOutput(msg.warning)
+		if showStatus {
+			m.status = fmt.Sprintf("Loaded %d skill(s).", len(m.skills))
+			if strings.TrimSpace(msg.warning) != "" {
+				m.status += " " + compactOutput(msg.warning)
+			}
 		}
 		return m, nil
 	case defaultsLoadedMsg:
@@ -375,11 +387,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = fmt.Sprintf("Loaded %d active source(s).", len(m.sources))
 		return m, nil
 	case installedLoadedMsg:
-		m.loading = false
-		m.viewMode = viewInstalled
+		m.loadingInstalled = false
+		m.loading = m.currentViewLoading()
+		showStatus := m.dashboardSection() == viewInstalled || m.viewMode == viewInstallResult || strings.TrimSpace(m.postReloadStatus) != ""
 		if msg.err != nil {
 			m.postReloadStatus = ""
-			m.status = "Load installed skills failed: " + msg.err.Error()
+			if showStatus {
+				m.status = "Load installed skills failed: " + msg.err.Error()
+			}
 			return m, nil
 		}
 		m.installedRows = msg.rows
@@ -393,7 +408,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if strings.TrimSpace(m.postReloadStatus) != "" {
 			m.status = m.postReloadStatus
 			m.postReloadStatus = ""
-		} else {
+		} else if showStatus {
 			m.status = fmt.Sprintf("Loaded %d installed skill row(s).", len(m.installedRows))
 		}
 		return m, nil
@@ -484,8 +499,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pendingInstall = InstallResult{}
 			m.installProgress = installProgressState{}
 			m.viewMode = viewInstallResult
-			m.status = fmt.Sprintf("Installed %d skill(s) to %d target(s).", len(m.installResult.SkillNames), len(m.installResult.Targets))
-			return m, nil
+			m.postReloadStatus = fmt.Sprintf("Installed %d skill(s) to %d target(s).", len(m.installResult.SkillNames), len(m.installResult.Targets))
+			m.status = m.postReloadStatus
+			m.loadingInstalled = true
+			return m, loadInstalled(m.repoRoot)
 		}
 		m.installProgress.Current = m.installProgress.Completed + 1
 		item, _ := m.installProgress.currentItem()
@@ -506,8 +523,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.installResult = m.pendingInstall
 			m.pendingInstall = InstallResult{}
 			m.viewMode = viewInstallResult
-			m.status = fmt.Sprintf("Installed %d skill(s) to %d target(s).", len(m.installResult.SkillNames), len(m.installResult.Targets))
-			return m, nil
+			m.postReloadStatus = fmt.Sprintf("Installed %d skill(s) to %d target(s).", len(m.installResult.SkillNames), len(m.installResult.Targets))
+			m.status = m.postReloadStatus
+			m.loadingInstalled = true
+			return m, loadInstalled(m.repoRoot)
 		}
 		successStatus := fmt.Sprintf("%s complete.", msg.action)
 		if strings.TrimSpace(msg.output) != "" {
@@ -520,6 +539,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.action == "Update installed" || msg.action == "Uninstall" {
 			m.loading = true
+			m.loadingInstalled = true
 			m.viewMode = viewInstalled
 			m.postReloadStatus = successStatus
 			m.status = "Reloading installed skills..."
@@ -639,9 +659,9 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "1":
-		return m.openDashboardSection(viewSkills)
-	case "2":
 		return m.openDashboardSection(viewInstalled)
+	case "2":
+		return m.openDashboardSection(viewSkills)
 	case "3":
 		return m.openDashboardSection(viewUsage)
 	case "4":
@@ -791,6 +811,7 @@ func (m model) reloadCurrentView(status string) (tea.Model, tea.Cmd) {
 	switch m.dashboardSection() {
 	case viewInstalled:
 		m.viewMode = viewInstalled
+		m.loadingInstalled = true
 		return m, loadInstalled(m.repoRoot)
 	case viewUsage:
 		m.viewMode = viewUsage
@@ -808,6 +829,7 @@ func (m model) reloadCurrentView(status string) (tea.Model, tea.Cmd) {
 		return m, nil
 	default:
 		m.viewMode = viewSkills
+		m.loadingSkills = true
 		return m, loadSkills(m.repoRoot)
 	}
 }
@@ -819,11 +841,13 @@ func (m model) openDashboardSection(section string) (tea.Model, tea.Cmd) {
 	switch section {
 	case viewSkills:
 		m.loading = true
+		m.loadingSkills = true
 		m.viewMode = viewSkills
 		m.status = "Loading catalog..."
 		return m, loadSkills(m.repoRoot)
 	case viewInstalled:
 		m.loading = true
+		m.loadingInstalled = true
 		m.viewMode = viewInstalled
 		m.status = "Loading installed skills..."
 		return m, loadInstalled(m.repoRoot)
@@ -873,6 +897,21 @@ func (m *model) clearSkillSearch() {
 	}
 	m.search = ""
 	m.applyFilter()
+}
+
+func (m model) currentViewLoading() bool {
+	switch m.viewMode {
+	case viewDetails, viewInstalledDetails, viewUsageDetails, viewInstallResult, viewAddSource, viewConfirmDelete, viewHelp:
+		return false
+	}
+	switch m.dashboardSection() {
+	case viewSkills:
+		return m.loadingSkills
+	case viewInstalled:
+		return m.loadingInstalled
+	default:
+		return m.loading
+	}
 }
 
 func (m model) canMoveDashboardSection() bool {
@@ -941,8 +980,8 @@ func (m model) updateInstallResultKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.status = "Returned to install targets."
 		return m, nil
 	case "esc", "enter", "b":
-		m.viewMode = viewSkills
-		m.status = "Returned to skills."
+		m.viewMode = viewInstalled
+		m.status = "Returned to installed skills."
 		return m, nil
 	default:
 		return m, nil
@@ -957,7 +996,7 @@ func (m model) updateHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.previousViewMode != "" {
 			m.viewMode = m.previousViewMode
 		} else {
-			m.viewMode = viewSkills
+			m.viewMode = viewInstalled
 		}
 		m.status = "Returned."
 		return m, nil
@@ -1283,7 +1322,7 @@ func (m model) updateTargetsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "enter", "i":
 		if m.targetPurpose != "install" {
-			m.status = "Select skills in 1 Skills, then press i to install."
+			m.status = "Select skills in 2 Skills, then press i to install."
 			return m, nil
 		}
 		return m.installToSelectedTargets()
@@ -1499,8 +1538,8 @@ func (m model) renderNavigation(width int) string {
 		label   string
 		section string
 	}{
-		{"1", "Skills", viewSkills},
-		{"2", "Installed", viewInstalled},
+		{"1", "Installed", viewInstalled},
+		{"2", "Skills", viewSkills},
 		{"3", "Usage", viewUsage},
 		{"4", "Sources", viewSources},
 		{"5", "Targets", viewTargets},
@@ -1612,6 +1651,10 @@ func (m model) skillsContent(width int) string {
 			checkbox = checkedStyle.Render("[✓]")
 		}
 		title := fmt.Sprintf("%s %s %s %s", cursor, treeStyle.Render(branch), checkbox, skill.Name)
+		locations := m.installedLocationsForSkill(skill)
+		if len(locations) > 0 {
+			title += "   " + projectBadgeStyle.Render("installed: "+installedLocationsBadge(locations))
+		}
 		if m.offset+row == m.cursor {
 			title = activeRowStyle.Render(title)
 		}
@@ -1649,10 +1692,69 @@ func (m model) detailsContent(width int) string {
 		labelLine("Triggers", skill.Triggers),
 		labelLine("Selected", selected),
 		labelLine("Default path", filepath.Join(m.installTargetPath(), skill.Name)),
+		labelLine("Installed", installedLocationsBadge(m.installedLocationsForSkill(skill))),
 		"",
 		wrapText(skill.Description, width),
 	}
+	if locations := m.installedLocationsForSkill(skill); len(locations) > 0 {
+		lines = append(lines, "", titleStyle.Render("Installed locations"), m.installedLocationsContent(locations, width))
+	}
 	return strings.Join(lines, "\n")
+}
+
+func (m model) installedLocationsForSkill(skill Skill) []InstalledSkill {
+	key := skill.Key()
+	rows := []InstalledSkill{}
+	for _, row := range m.installedRows {
+		if row.Managed != "yes" {
+			continue
+		}
+		if strings.TrimSpace(row.Source) == "" || row.Source == "-" {
+			continue
+		}
+		if row.Source+"/"+row.Skill != key && row.QualifiedSkill != key {
+			continue
+		}
+		rows = append(rows, row)
+	}
+	sortInstalledRows(rows)
+	return rows
+}
+
+func installedLocationsBadge(rows []InstalledSkill) string {
+	if len(rows) == 0 {
+		return "none"
+	}
+	if len(rows) == 1 {
+		return targetScopeLabel(rows[0].Target, rows[0].Scope)
+	}
+	return fmt.Sprintf("%d locations", len(rows))
+}
+
+func (m model) installedLocationsContent(rows []InstalledSkill, width int) string {
+	var b strings.Builder
+	for i, row := range rows {
+		if i > 0 {
+			fmt.Fprintln(&b)
+		}
+		metaParts := []string{"managed"}
+		if row.RegistryOnly {
+			metaParts = append(metaParts, "registry")
+		}
+		fmt.Fprintln(&b, "- "+targetScopeLabel(row.Target, row.Scope))
+		if row.Scope == "project" && strings.TrimSpace(row.ProjectPath) != "" && row.ProjectPath != "-" {
+			fmt.Fprintln(&b, "  project: "+truncate(row.ProjectPath, max(12, width-11)))
+		}
+		path := row.InstalledPath
+		if strings.TrimSpace(path) == "" || path == "-" {
+			path = row.Path
+		}
+		if strings.TrimSpace(path) != "" && path != "-" {
+			fmt.Fprintln(&b, "  path: "+truncate(path, max(12, width-8)))
+		}
+		fmt.Fprintln(&b, "  source: "+emptyLabel(row.Source, "-")+"   "+strings.Join(metaParts, " "))
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func (m model) targetsContent(width int) string {
@@ -1718,7 +1820,7 @@ func (m model) targetsContent(width int) string {
 func (m model) installedContent(width int) string {
 	legend := helpStyle.Render("[M] managed by Skillhub: update/uninstall   [ ] unmanaged: read-only in TUI   registry: recorded usage")
 	if len(m.installedRows) == 0 {
-		return legend + "\n\nNo installed skills found.\n\nInstall skills from 1 Skills, or run skillhub installed list in CLI."
+		return legend + "\n\nNo installed skills found.\n\nInstall skills from 2 Skills, or run skillhub installed list in CLI."
 	}
 
 	var b strings.Builder
@@ -2081,7 +2183,7 @@ func (m model) updateContent(width int) string {
 		labelLine("Skills", "skillhub installed update"),
 		labelLine("Projects", "skillhub installed usage update --projects"),
 		"",
-		wrapText("Use 2 Installed to update target folders, or 3 Usage to update recorded project installs for a highlighted skill.", width),
+		wrapText("Use 1 Installed to update target folders, or 3 Usage to update recorded project installs for a highlighted skill.", width),
 	}
 	return strings.Join(lines, "\n")
 }
@@ -2732,14 +2834,14 @@ func (m model) dashboardSection() string {
 			previous.viewMode = m.previousViewMode
 			return previous.dashboardSection()
 		}
-		return viewSkills
+		return viewInstalled
 	default:
 		return m.viewMode
 	}
 }
 
 func dashboardSections() []string {
-	return []string{viewSkills, viewInstalled, viewUsage, viewSources, viewTargets, viewUpdate}
+	return []string{viewInstalled, viewSkills, viewUsage, viewSources, viewTargets, viewUpdate}
 }
 
 func targetScopeLabel(target, scope string) string {

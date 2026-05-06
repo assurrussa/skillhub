@@ -377,6 +377,8 @@ func TestUsageDetailsUpdateReturnsToDetailsAfterReload(t *testing.T) {
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(model)
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
 	m = updated.(model)
 	if cmd == nil || !m.busy || !m.returnToUsageDetails {
@@ -396,6 +398,78 @@ func TestUsageDetailsUpdateReturnsToDetailsAfterReload(t *testing.T) {
 	}
 	if !strings.Contains(m.status, "Updated project usage: updated=0 unchanged=1 skipped=0 failed=0") {
 		t.Fatalf("expected usage update summary to remain visible, got %q", m.status)
+	}
+}
+
+func TestUsageFilterMatchesSkillSourceTargetProjectAndPath(t *testing.T) {
+	rows := []InstalledSkill{
+		{Source: "agent-rules", Skill: "go-project-rules", Managed: "yes", Target: "codex", Scope: "project", ProjectPath: "/tmp/project-a", Path: "/tmp/project-a/.agents/skills/go-project-rules"},
+		{Source: "agent-rules", Skill: "docs-project-rules", Managed: "yes", Target: "claude", Scope: "project", ProjectPath: "/tmp/project-b", Path: "/tmp/project-b/.claude/skills/docs-project-rules"},
+		{Source: "custom", Skill: "workflow-rules", Managed: "yes", Target: "directory", Scope: "custom", ProjectPath: "-", Path: "/tmp/custom/workflow-rules"},
+	}
+	m := initialModel(".")
+	m.loading = false
+	m.viewMode = viewUsage
+	m.usageRows = rows
+	m.applyUsageFilter()
+	if len(m.usageSummaries) != 3 {
+		t.Fatalf("expected all usage summaries without filter, got %#v", m.usageSummaries)
+	}
+
+	m.usageFilter = "claude"
+	m.applyUsageFilter()
+	if len(m.usageSummaries) != 1 || m.usageSummaries[0].Key != "agent-rules/docs-project-rules" {
+		t.Fatalf("expected claude filter to keep docs project rules, got %#v", m.usageSummaries)
+	}
+
+	m.usageFilter = "project-a"
+	m.applyUsageFilter()
+	if len(m.usageSummaries) != 1 || m.usageSummaries[0].Key != "agent-rules/go-project-rules" {
+		t.Fatalf("expected project path filter to keep go project rules, got %#v", m.usageSummaries)
+	}
+
+	m.usageFilter = "custom/workflow"
+	m.applyUsageFilter()
+	if len(m.usageSummaries) != 1 || m.usageSummaries[0].Key != "custom/workflow-rules" {
+		t.Fatalf("expected source/skill filter to keep workflow rules, got %#v", m.usageSummaries)
+	}
+}
+
+func TestUsageDetailsUpdateUsesHighlightedProjectLocation(t *testing.T) {
+	row := InstalledSkill{
+		Source:      "agent-rules",
+		Skill:       "go-project-rules",
+		Managed:     "yes",
+		Target:      "claude",
+		Scope:       "project",
+		ProjectPath: "/tmp/project-b",
+		Path:        "/tmp/project-b/.claude/skills/go-project-rules",
+	}
+	want := []string{"usage", "update", "--projects", "--target", "claude", "--project", "/tmp/project-b", "agent-rules/go-project-rules"}
+	if got := usageUpdateArgsForLocation(row); strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("expected targeted usage update args %#v, got %#v", want, got)
+	}
+}
+
+func TestUsageBulkUpdateArgsGroupsVisibleProjectRows(t *testing.T) {
+	rows := []InstalledSkill{
+		{Source: "agent-rules", Skill: "go-project-rules", Managed: "yes", Target: "claude", Scope: "project", ProjectPath: "/tmp/project-a"},
+		{Source: "agent-rules", Skill: "docs-project-rules", Managed: "yes", Target: "claude", Scope: "project", ProjectPath: "/tmp/project-a"},
+		{Source: "agent-rules", Skill: "go-project-rules", Managed: "yes", Target: "claude", Scope: "project", ProjectPath: "/tmp/project-a"},
+		{Source: "agent-rules", Skill: "go-project-rules", Managed: "yes", Target: "codex", Scope: "project", ProjectPath: "/tmp/project-b"},
+		{Source: "agent-rules", Skill: "go-project-rules", Managed: "yes", Target: "codex", Scope: "global", ProjectPath: "-"},
+	}
+	groups := usageBulkUpdateArgGroups(rows)
+	got := make([]string, 0, len(groups))
+	for _, group := range groups {
+		got = append(got, strings.Join(group, " "))
+	}
+	want := []string{
+		"usage update --projects --target claude --project /tmp/project-a agent-rules/docs-project-rules agent-rules/go-project-rules",
+		"usage update --projects --target codex --project /tmp/project-b agent-rules/go-project-rules",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("unexpected bulk update groups:\nwant %#v\ngot  %#v", want, got)
 	}
 }
 

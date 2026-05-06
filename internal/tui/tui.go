@@ -155,8 +155,10 @@ type model struct {
 	width                 int
 	height                int
 	search                string
+	usageFilter           string
 	sourceInput           string
 	searchMode            bool
+	usageFilterMode       bool
 	loading               bool
 	busy                  bool
 	noSources             bool
@@ -373,7 +375,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.usageRows = msg.rows
-		m.usageSummaries = buildUsageSummaries(msg.rows)
+		m.applyUsageFilter()
 		if m.usageCursor >= len(m.usageSummaries) {
 			m.usageCursor = len(m.usageSummaries) - 1
 		}
@@ -505,6 +507,33 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if msg.Type == tea.KeyRunes {
 			m.search += msg.String()
 			m.applyFilter()
+		}
+		return m, nil
+	}
+
+	if m.usageFilterMode {
+		switch msg.String() {
+		case "esc":
+			m.usageFilterMode = false
+			m.usageFilter = ""
+			m.applyUsageFilter()
+			m.status = "Usage filter cleared."
+			return m, nil
+		case "enter":
+			m.usageFilterMode = false
+			m.status = "Usage filter applied."
+			return m, nil
+		case "backspace":
+			if len(m.usageFilter) > 0 {
+				runes := []rune(m.usageFilter)
+				m.usageFilter = string(runes[:len(runes)-1])
+				m.applyUsageFilter()
+			}
+			return m, nil
+		}
+		if msg.Type == tea.KeyRunes {
+			m.usageFilter += msg.String()
+			m.applyUsageFilter()
 		}
 		return m, nil
 	}
@@ -953,6 +982,24 @@ func (m model) updateUsageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q":
 		return m, tea.Quit
+	case "/":
+		m.usageFilterMode = true
+		m.status = "Type usage filter."
+		return m, nil
+	case "esc":
+		if strings.TrimSpace(m.usageFilter) != "" {
+			m.usageFilter = ""
+			m.applyUsageFilter()
+			m.status = "Usage filter cleared."
+		}
+		return m, nil
+	case "c":
+		if strings.TrimSpace(m.usageFilter) != "" {
+			m.usageFilter = ""
+			m.applyUsageFilter()
+			m.status = "Usage filter cleared."
+		}
+		return m, nil
 	case "up", "k":
 		if m.usageCursor > 0 {
 			m.usageCursor--
@@ -989,9 +1036,24 @@ func (m model) updateUsageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = summary.Key + " has no recorded project installs to update."
 			return m, nil
 		}
+		rows := m.projectUsageRowsForKey(summary.Key)
+		if len(rows) == 0 {
+			m.status = summary.Key + " has no visible recorded project installs to update."
+			return m, nil
+		}
 		m.busy = true
-		m.status = "Updating recorded project usage for " + summary.Key + "..."
-		return m, runInstalledCommand(m.repoRoot, "Update usage", usageUpdateArgsForKey(summary.Key)...)
+		m.status = "Updating visible project usage for " + summary.Key + "..."
+		return m, runUsageBulkUpdateCommand(m.repoRoot, rows)
+	case "U":
+		m.returnToUsageDetails = false
+		rows := m.visibleProjectUsageRows()
+		if len(rows) == 0 {
+			m.status = "No visible recorded project installs to update."
+			return m, nil
+		}
+		m.busy = true
+		m.status = fmt.Sprintf("Updating %d visible project usage row(s)...", len(rows))
+		return m, runUsageBulkUpdateCommand(m.repoRoot, rows)
 	case "r":
 		m.returnToUsageDetails = false
 		return m.reloadCurrentView("Reloading usage...")
@@ -1004,6 +1066,10 @@ func (m model) updateUsageDetailsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q":
 		return m, tea.Quit
+	case "/":
+		m.usageFilterMode = true
+		m.status = "Type usage filter."
+		return m, nil
 	case "esc", "b":
 		m.viewMode = viewUsage
 		m.returnToUsageDetails = false
@@ -1023,24 +1089,29 @@ func (m model) updateUsageDetailsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "u":
-		key := m.usageDetailKey
-		if strings.TrimSpace(key) == "" {
-			if row, ok := m.currentUsageDetail(); ok {
-				key = installedSkillKey(row)
-			}
-		}
-		if strings.TrimSpace(key) == "" {
-			m.status = "No managed usage selected."
+		row, ok := m.currentUsageDetail()
+		if !ok {
+			m.status = "No usage location selected."
 			return m, nil
 		}
-		if !m.usageHasProjectRows(key) {
-			m.status = key + " has no recorded project installs to update."
+		if !isProjectUsageRow(row) {
+			m.status = installedSkillKey(row) + " location is not a recorded project install."
 			return m, nil
 		}
 		m.busy = true
 		m.returnToUsageDetails = true
-		m.status = "Updating recorded project usage for " + key + "..."
-		return m, runInstalledCommand(m.repoRoot, "Update usage", usageUpdateArgsForKey(key)...)
+		m.status = "Updating recorded project usage for " + installedSkillKey(row) + "..."
+		return m, runInstalledCommand(m.repoRoot, "Update usage", usageUpdateArgsForLocation(row)...)
+	case "U":
+		rows := projectUsageRows(m.usageDetailRows())
+		if len(rows) == 0 {
+			m.status = m.usageDetailKey + " has no visible recorded project installs to update."
+			return m, nil
+		}
+		m.busy = true
+		m.returnToUsageDetails = true
+		m.status = fmt.Sprintf("Updating %d visible project usage row(s)...", len(rows))
+		return m, runUsageBulkUpdateCommand(m.repoRoot, rows)
 	case "r":
 		m.loading = true
 		m.returnToUsageDetails = true
@@ -1645,18 +1716,28 @@ func (m model) installedDetailsContent(width int) string {
 
 func (m model) usageContent(width int) string {
 	legend := helpStyle.Render("Registry usage only: managed installs created or updated by Skillhub")
+	visibleRows := m.visibleUsageRows()
 	if len(m.usageSummaries) == 0 {
+		if strings.TrimSpace(m.usageFilter) != "" {
+			return legend + "\n\n" + labelLine("Filter", m.usageFilter) + "\n\nNo managed usage matched the filter."
+		}
 		return legend + "\n\nNo managed usage recorded.\n\nInstall a skill through Skillhub to create usage records."
 	}
 
 	var b strings.Builder
-	stats := installedOverviewStats(m.usageRows)
+	stats := installedOverviewStats(visibleRows)
 	fmt.Fprintf(&b, "%s   %s   %s   %s\n",
 		badgeStyle.Render(fmt.Sprintf("Installs: %d", stats.Installed)),
 		badgeStyle.Render(fmt.Sprintf("Skills: %d", stats.Skills)),
 		badgeStyle.Render(fmt.Sprintf("Projects: %d", stats.Projects)),
 		badgeStyle.Render(fmt.Sprintf("Managed: %d", stats.Managed)),
 	)
+	fmt.Fprintln(&b)
+	filter := emptyLabel(m.usageFilter, "none")
+	if m.usageFilterMode {
+		filter = m.usageFilter + "_"
+	}
+	fmt.Fprintf(&b, "%s   %s\n", labelLine("Filter", filter), labelLine("Visible", fmt.Sprintf("%d/%d", len(visibleRows), len(m.usageRows))))
 	fmt.Fprintln(&b)
 	fmt.Fprintln(&b, legend)
 	fmt.Fprintln(&b)
@@ -1711,6 +1792,13 @@ func (m model) usageDetailsContent(width int) string {
 		badgeStyle.Render(fmt.Sprintf("Projects: %d", summary.ProjectCount)),
 		badgeStyle.Render(fmt.Sprintf("Targets: %d", summary.TargetCount)),
 	)
+	if strings.TrimSpace(m.usageFilter) != "" || m.usageFilterMode {
+		filter := m.usageFilter
+		if m.usageFilterMode {
+			filter += "_"
+		}
+		fmt.Fprintf(&b, "%s\n\n", labelLine("Filter", emptyLabel(filter, "none")))
+	}
 
 	visible := m.usageDetailVisibleCount()
 	end := m.usageDetailOffset + visible
@@ -1844,8 +1932,9 @@ func (m model) helpContent(width int) string {
 		"j/k         move",
 		"space       select or toggle where applicable",
 		"enter       open or confirm",
-		"/           search skills",
+		"/           search skills or filter usage rows",
 		"u           update highlighted install or usage entry",
+		"U           update all visible recorded project installs in Usage",
 		"x           uninstall highlighted managed skill",
 		"s           sync sources",
 		"r           reload current section",
@@ -1896,6 +1985,9 @@ func (m model) defaultsContent(width int) string {
 }
 
 func (m model) helpText() string {
+	if m.usageFilterMode {
+		return "type filter  enter apply  backspace delete  esc clear  ctrl+c quit"
+	}
 	if m.viewMode == viewHelp {
 		return "enter/esc back  q quit"
 	}
@@ -1912,7 +2004,7 @@ func (m model) helpText() string {
 		return "j/k move location  u update  x uninstall  esc back  q quit"
 	}
 	if m.viewMode == viewUsageDetails {
-		return "j/k move location  u update project usage  r reload  esc back  q quit"
+		return "j/k move location  / filter  u update location  U update visible  r reload  esc back  q quit"
 	}
 	if m.viewMode == viewInstallResult {
 		return "enter/b back  t targets  q quit"
@@ -1924,7 +2016,7 @@ func (m model) helpText() string {
 		return "1-6/left-right sections  j/k move  enter details  u update target  x uninstall managed  r reload  ? help  q quit"
 	}
 	if m.viewMode == viewUsage {
-		return "1-6/left-right sections  j/k move  enter details  u update project usage  r reload  ? help  q quit"
+		return "1-6/left-right sections  j/k move  / filter  enter details  u update skill  U update visible  r reload  ? help  q quit"
 	}
 	if m.viewMode == viewSources {
 		return "1-6/left-right sections  d presets  n custom  s sync  r reload  ? help  q quit"
@@ -1994,6 +2086,57 @@ func (m *model) applyFilter() {
 	}
 	m.offset = 0
 	m.ensureCursorVisible()
+}
+
+func (m *model) applyUsageFilter() {
+	rows := m.visibleUsageRows()
+	m.usageSummaries = buildUsageSummaries(rows)
+	if m.usageCursor >= len(m.usageSummaries) {
+		m.usageCursor = len(m.usageSummaries) - 1
+	}
+	if m.usageCursor < 0 {
+		m.usageCursor = 0
+	}
+	if m.usageDetailCursor >= len(m.usageDetailRows()) {
+		m.usageDetailCursor = len(m.usageDetailRows()) - 1
+	}
+	if m.usageDetailCursor < 0 {
+		m.usageDetailCursor = 0
+	}
+	m.usageOffset = 0
+	m.usageDetailOffset = 0
+	m.ensureUsageCursorVisible()
+	m.ensureUsageDetailCursorVisible()
+}
+
+func (m model) visibleUsageRows() []InstalledSkill {
+	rows := []InstalledSkill{}
+	for _, row := range m.usageRows {
+		if usageRowMatchesFilter(row, m.usageFilter) {
+			rows = append(rows, row)
+		}
+	}
+	return rows
+}
+
+func usageRowMatchesFilter(row InstalledSkill, query string) bool {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return true
+	}
+	haystack := strings.ToLower(strings.Join([]string{
+		row.Source,
+		row.Skill,
+		installedSkillKey(row),
+		row.Target,
+		row.Scope,
+		row.ProjectPath,
+		row.TargetRoot,
+		row.InstalledPath,
+		row.Path,
+		row.ContentHash,
+	}, " "))
+	return strings.Contains(haystack, q)
 }
 
 func (m model) lastVisibleIndexByCategory(start, end int) map[string]int {
@@ -2298,7 +2441,7 @@ func (m model) usageDetailRows() []InstalledSkill {
 		}
 	}
 	rows := []InstalledSkill{}
-	for _, row := range m.usageRows {
+	for _, row := range m.visibleUsageRows() {
 		if installedSkillKey(row) == key {
 			rows = append(rows, row)
 		}
@@ -2307,13 +2450,32 @@ func (m model) usageDetailRows() []InstalledSkill {
 	return rows
 }
 
-func (m model) usageHasProjectRows(key string) bool {
-	for _, row := range m.usageRows {
-		if installedSkillKey(row) == key && row.Scope == "project" {
-			return true
+func (m model) projectUsageRowsForKey(key string) []InstalledSkill {
+	rows := []InstalledSkill{}
+	for _, row := range m.visibleUsageRows() {
+		if installedSkillKey(row) == key && isProjectUsageRow(row) {
+			rows = append(rows, row)
 		}
 	}
-	return false
+	return rows
+}
+
+func (m model) visibleProjectUsageRows() []InstalledSkill {
+	return projectUsageRows(m.visibleUsageRows())
+}
+
+func projectUsageRows(rows []InstalledSkill) []InstalledSkill {
+	result := []InstalledSkill{}
+	for _, row := range rows {
+		if isProjectUsageRow(row) {
+			result = append(result, row)
+		}
+	}
+	return result
+}
+
+func isProjectUsageRow(row InstalledSkill) bool {
+	return row.Scope == "project" && strings.TrimSpace(row.ProjectPath) != "" && row.ProjectPath != "-"
 }
 
 func (m model) sourceCount() int {
@@ -2966,6 +3128,70 @@ func installedUninstallArgsForRow(row InstalledSkill, projectDir string) []strin
 
 func usageUpdateArgsForKey(key string) []string {
 	return []string{"usage", "update", "--projects", key}
+}
+
+func usageUpdateArgsForLocation(row InstalledSkill) []string {
+	args := []string{"usage", "update", "--projects"}
+	if strings.TrimSpace(row.Target) != "" && row.Target != "-" {
+		args = append(args, "--target", row.Target)
+	}
+	if isProjectUsageRow(row) {
+		args = append(args, "--project", row.ProjectPath)
+	}
+	return append(args, installedSkillKey(row))
+}
+
+func usageBulkUpdateArgGroups(rows []InstalledSkill) [][]string {
+	type groupKey struct {
+		target  string
+		project string
+	}
+	order := []groupKey{}
+	grouped := map[groupKey]map[string]bool{}
+	for _, row := range rows {
+		if !isProjectUsageRow(row) {
+			continue
+		}
+		key := groupKey{target: row.Target, project: row.ProjectPath}
+		if _, ok := grouped[key]; !ok {
+			grouped[key] = map[string]bool{}
+			order = append(order, key)
+		}
+		grouped[key][installedSkillKey(row)] = true
+	}
+
+	groups := make([][]string, 0, len(order))
+	for _, key := range order {
+		skills := make([]string, 0, len(grouped[key]))
+		for skill := range grouped[key] {
+			skills = append(skills, skill)
+		}
+		sort.Strings(skills)
+		args := []string{"usage", "update", "--projects", "--target", key.target, "--project", key.project}
+		args = append(args, skills...)
+		groups = append(groups, args)
+	}
+	return groups
+}
+
+func runUsageBulkUpdateCommand(repoRoot string, rows []InstalledSkill) tea.Cmd {
+	return func() tea.Msg {
+		groups := usageBulkUpdateArgGroups(rows)
+		var combined strings.Builder
+		for _, args := range groups {
+			output, err := runScript(repoRoot, "scripts/installed.sh", args...)
+			if strings.TrimSpace(output) != "" {
+				combined.WriteString(output)
+				if !strings.HasSuffix(output, "\n") {
+					combined.WriteString("\n")
+				}
+			}
+			if err != nil {
+				return commandDoneMsg{action: "Update usage", output: combined.String(), err: commandError(err, output)}
+			}
+		}
+		return commandDoneMsg{action: "Update usage", output: combined.String()}
+	}
 }
 
 func installedRowProjectDir(row InstalledSkill, fallback string) string {

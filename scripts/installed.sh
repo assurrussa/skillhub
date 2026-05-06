@@ -11,7 +11,7 @@ usage() {
     '  sh scripts/installed.sh update [--target <target>] [--scope global|project] [--project <path>] [--dir <path>] [-v|--verbose]' \
     '  sh scripts/installed.sh uninstall <skill> [--target <target>] [--scope global|project] [--project <path>] [--dir <path>] [--force]' \
     '  sh scripts/installed.sh usage [[<source>/]<skill>] [--tsv]' \
-    '  sh scripts/installed.sh usage update --projects [[<source>/]<skill>...] [-v|--verbose]'
+    '  sh scripts/installed.sh usage update --projects [--target <target>] [--project <path>] [[<source>/]<skill>...] [-v|--verbose]'
 }
 
 update_sources_file=""
@@ -625,12 +625,34 @@ usage_update_projects() {
   projects=0
   verbose=0
   filters=""
+  target_filter=""
+  project_filter=""
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --projects)
         projects=1
         shift
+        ;;
+      --target)
+        if [ "$#" -lt 2 ]; then
+          printf '%s\n' '--target requires a value' >&2
+          exit 1
+        fi
+        if ! skillhub_is_valid_target_id "$2"; then
+          printf 'Invalid target id: %s\n' "$2" >&2
+          exit 1
+        fi
+        target_filter="$2"
+        shift 2
+        ;;
+      --project)
+        if [ "$#" -lt 2 ]; then
+          printf '%s\n' '--project requires a value' >&2
+          exit 1
+        fi
+        project_filter=$(skillhub_project_dir "$2")
+        shift 2
         ;;
       -v|--verbose)
         verbose=1
@@ -675,6 +697,12 @@ usage_update_projects() {
       esac
 
       if [ "$scope" != "project" ]; then
+        continue
+      fi
+      if [ -n "$target_filter" ] && [ "$target" != "$target_filter" ]; then
+        continue
+      fi
+      if [ -n "$project_filter" ] && [ "$project_path" != "$project_filter" ]; then
         continue
       fi
       if ! usage_filter_list_matches "$source_name" "$skill_name" "$filters"; then

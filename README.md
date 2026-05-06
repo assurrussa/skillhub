@@ -117,6 +117,7 @@ skillhub installed usage rules-selector
 skillhub installed usage agent-rules/go-project-rules --tsv
 skillhub installed usage update --projects
 skillhub installed usage update --projects rules-selector -v
+skillhub installed usage update --projects --target codex --project /path/to/project agent-rules/go-project-rules
 skillhub recommend
 skillhub recommend --project /path/to/project
 skillhub recommend --project /path/to/project --tsv
@@ -149,10 +150,11 @@ In the TUI:
 
 ```text
 1/2/3/4/5/6 switch sections
+left/right switch sections
 j/k       move
 space     select/unselect
 enter     open highlighted details
-/         search
+/         search skills or filter usage
 a         select all visible skills
 c         clear selection
 d         open recommended source presets
@@ -160,6 +162,7 @@ n         add custom source path or git URL
 t         choose install targets
 i         choose targets for selected skills
 u         update highlighted install or usage entry
+U         update all visible project usage entries
 x         uninstall highlighted managed skill
 s         sync sources
 r         reload catalog
@@ -180,8 +183,9 @@ confirmation. Unmanaged uninstall remains CLI-only with explicit `--force`.
 
 The Usage section reads the managed usage registry and groups installs by
 `source/skill`. Press `enter` to see every global, project, or custom-directory
-location for that skill. Press `u` to update recorded project-scope installs for
-the highlighted skill.
+location for that skill. Press `/` to filter by source, skill, target, scope,
+project root, or install path. Press `u` to update the highlighted skill or
+location, and `U` to update all visible recorded project-scope installs.
 
 The Sources section shows active sources, recommended presets, custom source
 entry, and source sync. The Update section intentionally does not run
@@ -300,6 +304,7 @@ skillhub installed update --target claude --scope project --project /path/to/pro
 skillhub installed update --target directory --dir /tmp/skills -v
 skillhub installed usage update --projects
 skillhub installed usage update --projects rules-selector -v
+skillhub installed usage update --projects --target codex --project /path/to/project agent-rules/go-project-rules
 ```
 
 `installed update` syncs the source recorded in `.skillhub.json`, compares the
@@ -308,8 +313,9 @@ managed skills. If the source or catalog entry is missing, the skill is skipped
 and left installed.
 
 `installed usage update --projects` updates only project-scope installs recorded
-in `installed.tsv`. `skillhub update --cascade` also runs this project-usage
-update after the regular managed target update.
+in `installed.tsv`. Use `--target` and `--project` to narrow the recorded rows
+without changing the default all-project behavior. `skillhub update --cascade`
+also runs this project-usage update after the regular managed target update.
 
 Recommend a minimal project skill set without installing anything:
 
@@ -319,10 +325,13 @@ skillhub recommend --project /path/to/project
 skillhub recommend --project /path/to/project --tsv
 ```
 
-Recommendations are based on active source catalogs and project signals such as
-`AGENTS.md`, README/docs, Go workspaces, package manifests, and public
-OpenAPI/protobuf contracts. With no active sources, the command prints the same
-onboarding message as `skills list`.
+Recommendations are ranked from active source catalog categories/triggers and
+repository evidence such as `AGENTS.md`, local assistant rules, README/docs,
+Go modules/workspaces, package manifests, public package indicators, and
+OpenAPI/protobuf contracts. Human output includes scores and evidence-based
+reasons; `--tsv` keeps the stable `source skill reason install_arg` columns in
+ranked order. With no active sources, the command prints the same onboarding
+message as `skills list`.
 
 Uninstall managed skills:
 
@@ -365,12 +374,12 @@ The current implementation is intentionally conservative. Useful next slices:
 
 - Import existing `.skillhub.json` metadata into `installed.tsv` so installs
   created before the usage registry can be managed without reinstalling.
-- Extend the TUI Usage manager with filters, update-all actions for a
-  skill/source, and bulk operations across recorded project installs.
+- Add richer TUI Usage manager actions such as source-level bulk operations,
+  saved filters, and dry-run summaries across recorded project installs.
 - Add real target adapters for more assistants after their current on-disk
   formats and supported paths are verified.
-- Improve `skillhub recommend` so project analysis ranks skills more precisely
-  from repository signals, local rules, and active source catalogs.
+- Improve `skillhub recommend` with deeper language/framework detection and
+  source-specific heuristics while keeping the no-install recommendation flow.
 
 ## Validation
 

@@ -82,6 +82,7 @@ listed in `defaults/sources.tsv` and must be added explicitly:
 ```sh
 skillhub sources defaults list
 skillhub sources defaults add agent-rules
+skillhub sources defaults add mattpocock
 skillhub sources list
 ```
 
@@ -130,6 +131,7 @@ skillhub sources list --tsv
 skillhub sources sync agent-rules
 skillhub sources defaults list
 skillhub sources defaults add agent-rules
+skillhub sources defaults add mattpocock
 skillhub sources add ../agent-rules --name local-agent-rules
 skillhub sources add https://github.com/mattpocock/skills --name mattpocock
 skillhub sources remove local-agent-rules

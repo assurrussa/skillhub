@@ -181,6 +181,7 @@ type model struct {
 	selectedTargets  map[string]bool
 	pendingInstall   InstallResult
 	installResult    InstallResult
+	installProgress  installProgressState
 	pendingUninstall InstalledSkill
 }
 
@@ -220,6 +221,26 @@ type commandDoneMsg struct {
 	action string
 	output string
 	err    error
+}
+
+type installStepDoneMsg struct {
+	output string
+	err    error
+}
+
+type installQueueItem struct {
+	Skill  string
+	Choice InstallTargetChoice
+}
+
+type installProgressState struct {
+	Items     []installQueueItem
+	Current   int
+	Completed int
+	Total     int
+	LastLine  string
+	Failed    bool
+	Error     string
 }
 
 var (
@@ -445,6 +466,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "Loaded target paths."
 		}
 		return m, nil
+	case installStepDoneMsg:
+		if strings.TrimSpace(msg.output) != "" {
+			m.installProgress.LastLine = lastOutputLine(msg.output)
+		}
+		if msg.err != nil {
+			m.busy = false
+			m.installProgress.Failed = true
+			m.installProgress.Error = msg.err.Error()
+			m.status = fmt.Sprintf("Install failed at %d/%d.", m.installProgress.Current, m.installProgress.Total)
+			return m, nil
+		}
+		m.installProgress.Completed++
+		if m.installProgress.Completed >= m.installProgress.Total {
+			m.busy = false
+			m.installResult = m.pendingInstall
+			m.pendingInstall = InstallResult{}
+			m.installProgress = installProgressState{}
+			m.viewMode = viewInstallResult
+			m.status = fmt.Sprintf("Installed %d skill(s) to %d target(s).", len(m.installResult.SkillNames), len(m.installResult.Targets))
+			return m, nil
+		}
+		m.installProgress.Current = m.installProgress.Completed + 1
+		item, _ := m.installProgress.currentItem()
+		m.status = m.installProgressStatus()
+		return m, runInstallStepCommand(m.repoRoot, item, m.projectDir)
 	case commandDoneMsg:
 		m.busy = false
 		if msg.err != nil {
@@ -548,6 +594,19 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.applyUsageFilter()
 		}
 		return m, nil
+	}
+
+	if m.installProgress.Failed {
+		switch msg.String() {
+		case "q":
+			return m, tea.Quit
+		case "esc", "enter", "b":
+			m.installProgress = installProgressState{}
+			m.status = "Returned to install targets."
+			return m, nil
+		default:
+			return m, nil
+		}
 	}
 
 	if m.loading || m.busy {
@@ -838,10 +897,21 @@ func (m model) installToSelectedTargets() (tea.Model, tea.Cmd) {
 		m.status = "Select at least one supported install target."
 		return m, nil
 	}
+	queue := buildInstallQueue(choices, names)
+	if len(queue) == 0 {
+		m.status = "Select at least one supported install target."
+		return m, nil
+	}
 	m.busy = true
 	m.pendingInstall = buildInstallResult(choices, names)
-	m.status = fmt.Sprintf("Installing %d skill(s) to %d target(s)...", len(names), len(choices))
-	return m, runInstallTargetsCommand(m.repoRoot, choices, m.projectDir, names)
+	m.installProgress = installProgressState{
+		Items:   queue,
+		Current: 1,
+		Total:   len(queue),
+	}
+	item, _ := m.installProgress.currentItem()
+	m.status = m.installProgressStatus()
+	return m, runInstallStepCommand(m.repoRoot, item, m.projectDir)
 }
 
 func (m model) updateDetailsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1450,6 +1520,13 @@ func (m model) renderNavigation(width int) string {
 }
 
 func (m model) renderBody(width int) string {
+	if m.installProgress.Total > 0 && (m.busy || m.installProgress.Failed) {
+		title := "Install progress"
+		if m.installProgress.Failed {
+			title = "Install failed"
+		}
+		return m.renderPanel(title, m.installProgressContent(width-6), width)
+	}
 	if m.loading {
 		return m.renderPanel(sectionTitle(m.dashboardSection()), statusStyle.Render(m.status), width)
 	}
@@ -1914,6 +1991,37 @@ func (m model) usageDetailsContent(width int) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+func (m model) installProgressContent(width int) string {
+	item, ok := m.installProgress.currentItem()
+	if !ok {
+		return "No install step is running."
+	}
+
+	title := fmt.Sprintf("Installing %d/%d", m.installProgress.Current, m.installProgress.Total)
+
+	var b strings.Builder
+	fmt.Fprintln(&b, titleStyle.Render(title))
+	fmt.Fprintln(&b)
+	fmt.Fprintf(&b, "Skill %s\n", item.Skill)
+	fmt.Fprintf(&b, "Target %s\n", item.Choice.Label)
+	if strings.TrimSpace(item.Choice.Path) != "" {
+		fmt.Fprintf(&b, "Path %s\n", truncate(item.Choice.Path, max(12, width-5)))
+	}
+	fmt.Fprintln(&b)
+	fmt.Fprintln(&b, installProgressBar(m.installProgress.Completed, m.installProgress.Total, max(12, width-8)))
+	if strings.TrimSpace(m.installProgress.LastLine) != "" {
+		fmt.Fprintln(&b)
+		fmt.Fprintln(&b, "Last result")
+		fmt.Fprintln(&b, indent(wrapText(m.installProgress.LastLine, max(12, width-2)), "  "))
+	}
+	if strings.TrimSpace(m.installProgress.Error) != "" {
+		fmt.Fprintln(&b)
+		fmt.Fprintln(&b, "Error")
+		fmt.Fprintln(&b, indent(wrapText(m.installProgress.Error, max(12, width-2)), "  "))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
 func (m model) installResultContent(width int) string {
 	if len(m.installResult.Targets) == 0 {
 		return "No install result available."
@@ -2063,6 +2171,9 @@ func (m model) defaultsContent(width int) string {
 }
 
 func (m model) helpText() string {
+	if m.installProgress.Failed {
+		return "enter/esc back to targets  q quit"
+	}
 	if m.usageFilterMode {
 		return "type filter  enter apply  backspace delete  esc clear  ctrl+c quit"
 	}
@@ -3442,21 +3553,76 @@ func scopeDisplayRank(scope string) int {
 	}
 }
 
-func runInstallTargetsCommand(repoRoot string, choices []InstallTargetChoice, projectDir string, names []string) tea.Cmd {
-	return func() tea.Msg {
-		var combined strings.Builder
+func buildInstallQueue(choices []InstallTargetChoice, names []string) []installQueueItem {
+	items := make([]installQueueItem, 0, len(choices)*len(names))
+	for _, name := range names {
 		for _, choice := range choices {
-			args := installArgsForTargetChoice(choice, projectDir, names)
-
-			output, err := runScript(repoRoot, "scripts/skills.sh", args...)
-			if strings.TrimSpace(output) != "" {
-				fmt.Fprintf(&combined, "[%s]\n%s", choice.Label, output)
-			}
-			if err != nil {
-				return commandDoneMsg{action: "Install", output: combined.String(), err: commandError(err, output)}
-			}
+			items = append(items, installQueueItem{Skill: name, Choice: choice})
 		}
-		return commandDoneMsg{action: "Install", output: combined.String()}
+	}
+	return items
+}
+
+func (p installProgressState) currentItem() (installQueueItem, bool) {
+	index := p.Current - 1
+	if index < 0 || index >= len(p.Items) {
+		return installQueueItem{}, false
+	}
+	return p.Items[index], true
+}
+
+func (m model) installProgressStatus() string {
+	item, ok := m.installProgress.currentItem()
+	if !ok {
+		return "Installing..."
+	}
+	return fmt.Sprintf("Installing %d/%d: %s -> %s.", m.installProgress.Current, m.installProgress.Total, item.Skill, item.Choice.Label)
+}
+
+func installProgressBar(completed, total, width int) string {
+	if total <= 0 {
+		total = 1
+	}
+	if width > 36 {
+		width = 36
+	}
+	if width < 12 {
+		width = 12
+	}
+	barWidth := width - 7
+	if barWidth < 4 {
+		barWidth = 4
+	}
+	if completed < 0 {
+		completed = 0
+	}
+	if completed > total {
+		completed = total
+	}
+	filled := completed * barWidth / total
+	percent := completed * 100 / total
+	return fmt.Sprintf("[%s%s] %3d%%", strings.Repeat("#", filled), strings.Repeat("-", barWidth-filled), percent)
+}
+
+func lastOutputLine(output string) string {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line != "" {
+			return truncate(line, 180)
+		}
+	}
+	return ""
+}
+
+func runInstallStepCommand(repoRoot string, item installQueueItem, projectDir string) tea.Cmd {
+	return func() tea.Msg {
+		args := installArgsForTargetChoice(item.Choice, projectDir, []string{item.Skill})
+		output, err := runScript(repoRoot, "scripts/skills.sh", args...)
+		if err != nil {
+			return installStepDoneMsg{output: output, err: commandError(err, output)}
+		}
+		return installStepDoneMsg{output: output}
 	}
 }
 

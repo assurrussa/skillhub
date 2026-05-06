@@ -135,6 +135,7 @@ func TestLoadSkillsShowsStaleCacheWarningInStatus(t *testing.T) {
 	}
 
 	m := initialModel(testRepoRoot(t))
+	m.viewMode = viewSkills
 	updated, _ := m.Update(loaded)
 	m = updated.(model)
 	if !strings.Contains(m.status, "stale cache") {
@@ -209,6 +210,7 @@ func TestSelectionUsesQualifiedSkillNames(t *testing.T) {
 func TestViewShowsSourceColumn(t *testing.T) {
 	m := initialModel(".")
 	m.loading = false
+	m.viewMode = viewSkills
 	m.width = 120
 	m.height = 20
 	m.skills = []Skill{
@@ -225,6 +227,7 @@ func TestViewShowsSourceColumn(t *testing.T) {
 func TestViewShowsTaskOrientedSkillList(t *testing.T) {
 	m := initialModel(".")
 	m.loading = false
+	m.viewMode = viewSkills
 	m.width = 120
 	m.height = 30
 	m.skills = []Skill{
@@ -272,8 +275,8 @@ func TestDashboardRendersSectionNavigation(t *testing.T) {
 
 	view := stripANSI(m.View())
 	for _, want := range []string{
-		"1 Skills",
-		"2 Installed",
+		"1 Installed",
+		"2 Skills",
 		"3 Usage",
 		"4 Sources",
 		"5 Targets",
@@ -285,9 +288,42 @@ func TestDashboardRendersSectionNavigation(t *testing.T) {
 	}
 }
 
+func TestInitialModelDefaultsToInstalled(t *testing.T) {
+	m := initialModel(".")
+	if m.viewMode != viewInstalled {
+		t.Fatalf("expected default view to be installed, got %q", m.viewMode)
+	}
+	if m.status != "Loading installed skills..." {
+		t.Fatalf("expected installed loading status, got %q", m.status)
+	}
+}
+
+func TestInitialCatalogLoadDoesNotClearInstalledLoading(t *testing.T) {
+	m := initialModel(".")
+	updated, _ := m.Update(skillsLoadedMsg{skills: []Skill{
+		{Source: "agent-rules", Name: "go-project-rules", Category: "go", Description: "Go rules"},
+	}})
+	m = updated.(model)
+	if !m.loading {
+		t.Fatalf("expected installed-first screen to keep loading until installed rows load")
+	}
+	if m.status != "Loading installed skills..." {
+		t.Fatalf("expected installed loading status to remain, got %q", m.status)
+	}
+
+	updated, _ = m.Update(installedLoadedMsg{rows: []InstalledSkill{
+		{Target: "codex", Scope: "global", Skill: "go-project-rules", Managed: "yes", Source: "agent-rules", QualifiedSkill: "agent-rules/go-project-rules", Path: "/tmp/skills/go-project-rules"},
+	}})
+	m = updated.(model)
+	if m.loading {
+		t.Fatalf("expected loading to finish after installed rows load")
+	}
+}
+
 func TestEnterOpensSkillDetails(t *testing.T) {
 	m := initialModel(".")
 	m.loading = false
+	m.viewMode = viewSkills
 	m.width = 120
 	m.height = 80
 	m.skills = []Skill{
@@ -937,12 +973,12 @@ func TestLeftRightSwitchDashboardSections(t *testing.T) {
 	m.loading = false
 	m.width = 120
 	m.height = 30
-	m.viewMode = viewSkills
+	m.viewMode = viewInstalled
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
 	m = updated.(model)
-	if m.viewMode != viewInstalled || !m.loading {
-		t.Fatalf("expected right from skills to load installed section, got view=%q loading=%v", m.viewMode, m.loading)
+	if m.viewMode != viewSkills || !m.loading {
+		t.Fatalf("expected right from installed to load skills section, got view=%q loading=%v", m.viewMode, m.loading)
 	}
 
 	m.loading = false
@@ -955,8 +991,29 @@ func TestLeftRightSwitchDashboardSections(t *testing.T) {
 	m.loading = false
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyLeft})
 	m = updated.(model)
+	if m.viewMode != viewSkills || !m.loading {
+		t.Fatalf("expected left from usage to load skills section, got view=%q loading=%v", m.viewMode, m.loading)
+	}
+}
+
+func TestNumberKeysUseInstalledFirstDashboardOrder(t *testing.T) {
+	m := initialModel(".")
+	m.loading = false
+	m.width = 120
+	m.height = 30
+	m.viewMode = viewSkills
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("1")})
+	m = updated.(model)
 	if m.viewMode != viewInstalled || !m.loading {
-		t.Fatalf("expected left from usage to load installed section, got view=%q loading=%v", m.viewMode, m.loading)
+		t.Fatalf("expected 1 to load installed section, got view=%q loading=%v", m.viewMode, m.loading)
+	}
+
+	m.loading = false
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
+	m = updated.(model)
+	if m.viewMode != viewSkills || !m.loading {
+		t.Fatalf("expected 2 to load skills section, got view=%q loading=%v", m.viewMode, m.loading)
 	}
 }
 
@@ -1018,6 +1075,7 @@ func TestLeftRightDoesNotLeaveInstallTargetPicker(t *testing.T) {
 func TestSkillSelectionUsesSoftActiveAndGreenSelectedStyles(t *testing.T) {
 	m := initialModel(".")
 	m.loading = false
+	m.viewMode = viewSkills
 	m.width = 120
 	m.height = 30
 	m.skills = []Skill{
@@ -1041,6 +1099,7 @@ func TestSkillSelectionUsesSoftActiveAndGreenSelectedStyles(t *testing.T) {
 func TestViewGroupsSkillsByCategoryTree(t *testing.T) {
 	m := initialModel(".")
 	m.loading = false
+	m.viewMode = viewSkills
 	m.width = 120
 	m.height = 30
 	m.skills = []Skill{
@@ -1062,9 +1121,79 @@ func TestViewGroupsSkillsByCategoryTree(t *testing.T) {
 	}
 }
 
+func TestSkillsListShowsManagedInstalledBadge(t *testing.T) {
+	m := initialModel(".")
+	m.loading = false
+	m.viewMode = viewSkills
+	m.width = 120
+	m.height = 30
+	m.skills = []Skill{
+		{Source: "mattpocock", Name: "productivity_grill-me", Category: "productivity", Description: "Grill me"},
+		{Source: "agent-rules", Name: "go-project-rules", Category: "go", Description: "Go rules"},
+	}
+	m.installedRows = []InstalledSkill{
+		{Target: "claude", Scope: "global", Source: "mattpocock", Skill: "productivity_grill-me", QualifiedSkill: "mattpocock/productivity_grill-me", Managed: "yes", Path: "/home/me/.claude/skills/productivity_grill-me"},
+		{Target: "codex", Scope: "project", Source: "mattpocock", Skill: "productivity_grill-me", QualifiedSkill: "mattpocock/productivity_grill-me", Managed: "yes", ProjectPath: "/repo", Path: "/repo/.agents/skills/productivity_grill-me"},
+		{Target: "codex", Scope: "global", Source: "-", Skill: "go-project-rules", Managed: "no", Path: "/home/me/.agents/skills/go-project-rules"},
+	}
+	m.applyFilter()
+
+	view := stripANSI(m.View())
+	for _, want := range []string{
+		"productivity_grill-me",
+		"installed: 2 locations",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected skill list to contain %q, got:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "go-project-rules   installed:") {
+		t.Fatalf("unmanaged installed rows should not create catalog badges, got:\n%s", view)
+	}
+}
+
+func TestSkillDetailsShowsInstalledLocations(t *testing.T) {
+	m := initialModel(".")
+	m.loading = false
+	m.viewMode = viewSkills
+	m.width = 120
+	m.height = 40
+	m.skills = []Skill{
+		{Source: "mattpocock", Name: "productivity_grill-me", Category: "productivity", Description: "Grill me"},
+	}
+	m.installedRows = []InstalledSkill{
+		{
+			Target:         "claude",
+			Scope:          "global",
+			Source:         "mattpocock",
+			Skill:          "productivity_grill-me",
+			QualifiedSkill: "mattpocock/productivity_grill-me",
+			Managed:        "yes",
+			Path:           "/home/me/.claude/skills/productivity_grill-me",
+			RegistryOnly:   true,
+		},
+	}
+	m.applyFilter()
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+	view := stripANSI(m.View())
+	for _, want := range []string{
+		"Installed locations",
+		"Claude global",
+		"/home/me/.claude/skills/productivity_grill-me",
+		"managed registry",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected skill details to contain %q, got:\n%s", want, view)
+		}
+	}
+}
+
 func TestSmallHeightViewKeepsDashboardHeaderVisible(t *testing.T) {
 	m := initialModel(".")
 	m.loading = false
+	m.viewMode = viewSkills
 	m.width = 120
 	m.height = 18
 	m.skills = []Skill{
@@ -1093,7 +1222,7 @@ func TestSmallHeightViewKeepsDashboardHeaderVisible(t *testing.T) {
 	m.applyFilter()
 
 	view := stripANSI(m.View())
-	for _, want := range []string{"Skillhub", "Sources: 2", "1 Skills", "2 Installed", "6 Update"} {
+	for _, want := range []string{"Skillhub", "Sources: 2", "1 Installed", "2 Skills", "6 Update"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected small-height view to keep dashboard text %q visible, got:\n%s", want, view)
 		}
@@ -1155,6 +1284,7 @@ func TestParseTargetDetectionsTSV(t *testing.T) {
 func TestInstallOpensTargetSelection(t *testing.T) {
 	m := initialModel(".")
 	m.loading = false
+	m.viewMode = viewSkills
 	m.width = 120
 	m.height = 80
 	m.skills = []Skill{
@@ -1267,12 +1397,25 @@ func TestInstallSuccessOpensResultScreen(t *testing.T) {
 		t.Fatalf("expected queued install progress 2/2 after first step, got busy=%v progress=%#v", m.busy, m.installProgress)
 	}
 
-	updated, _ = m.Update(installStepDoneMsg{
+	updated, cmd := m.Update(installStepDoneMsg{
 		output: "Installed rules-selector from agent-rules to /tmp/skills/rules-selector\n",
 	})
 	m = updated.(model)
 	if m.viewMode != viewInstallResult {
 		t.Fatalf("expected install result view, got %q", m.viewMode)
+	}
+	if cmd == nil {
+		t.Fatalf("expected install completion to refresh installed rows")
+	}
+	updated, _ = m.Update(installedLoadedMsg{rows: []InstalledSkill{
+		{Target: "codex", Scope: "global", Source: "agent-rules", Skill: "go-project-rules", QualifiedSkill: "agent-rules/go-project-rules", Managed: "yes", Path: "/tmp/skills/go-project-rules"},
+	}})
+	m = updated.(model)
+	if m.viewMode != viewInstallResult {
+		t.Fatalf("expected installed refresh to keep result view, got %q", m.viewMode)
+	}
+	if len(m.installedRows) != 1 {
+		t.Fatalf("expected installed rows to refresh, got %#v", m.installedRows)
 	}
 
 	view := stripANSI(m.View())
@@ -1408,7 +1551,7 @@ func TestInstallProgressFailureCanReturnToTargets(t *testing.T) {
 	}
 }
 
-func TestInstallResultCanReturnToTargetsOrSkills(t *testing.T) {
+func TestInstallResultCanReturnToTargetsOrInstalled(t *testing.T) {
 	m := initialModel(".")
 	m.loading = false
 	m.viewMode = viewInstallResult
@@ -1423,8 +1566,8 @@ func TestInstallResultCanReturnToTargetsOrSkills(t *testing.T) {
 	m.viewMode = viewInstallResult
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
-	if m.viewMode != viewSkills {
-		t.Fatalf("expected enter to return to skills, got %q", m.viewMode)
+	if m.viewMode != viewInstalled {
+		t.Fatalf("expected enter to return to installed, got %q", m.viewMode)
 	}
 }
 
@@ -1515,6 +1658,7 @@ func TestSkillVisibleCountLeavesRoomForMultilineCards(t *testing.T) {
 func TestCustomSourceInputModeCapturesText(t *testing.T) {
 	m := initialModel(".")
 	m.loading = false
+	m.viewMode = viewSources
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
 	m = updated.(model)

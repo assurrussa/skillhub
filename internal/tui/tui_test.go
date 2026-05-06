@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1254,8 +1255,21 @@ func TestInstallSuccessOpensResultScreen(t *testing.T) {
 	if !m.busy {
 		t.Fatalf("expected install to mark TUI busy")
 	}
+	if m.installProgress.Total != 2 || m.installProgress.Current != 1 {
+		t.Fatalf("expected queued install progress 1/2, got %#v", m.installProgress)
+	}
 
-	updated, _ = m.Update(commandDoneMsg{action: "Install"})
+	updated, _ = m.Update(installStepDoneMsg{
+		output: "Installed go-project-rules from agent-rules to /tmp/skills/go-project-rules\n",
+	})
+	m = updated.(model)
+	if !m.busy || m.installProgress.Current != 2 || m.installProgress.Completed != 1 {
+		t.Fatalf("expected queued install progress 2/2 after first step, got busy=%v progress=%#v", m.busy, m.installProgress)
+	}
+
+	updated, _ = m.Update(installStepDoneMsg{
+		output: "Installed rules-selector from agent-rules to /tmp/skills/rules-selector\n",
+	})
 	m = updated.(model)
 	if m.viewMode != viewInstallResult {
 		t.Fatalf("expected install result view, got %q", m.viewMode)
@@ -1274,6 +1288,123 @@ func TestInstallSuccessOpensResultScreen(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected install result view to contain %q, got:\n%s", want, view)
 		}
+	}
+}
+
+func TestInstallProgressViewShowsCurrentStep(t *testing.T) {
+	m := initialModel(".")
+	m.loading = false
+	m.width = 120
+	m.height = 32
+	m.selected = map[string]bool{
+		"agent-rules/go-project-rules": true,
+		"mattpocock/engineering_tdd":   true,
+	}
+	m.targetChoices = []InstallTargetChoice{
+		{Key: "codex:global", Target: "codex", Label: "Codex global", Scope: "global", Status: "supported", Path: "/tmp/codex", Supported: true},
+		{Key: "claude:global", Target: "claude", Label: "Claude global", Scope: "global", Status: "supported", Path: "/tmp/claude", Supported: true},
+	}
+	m.selectedTargets = map[string]bool{
+		"codex:global":  true,
+		"claude:global": true,
+	}
+
+	updated, cmd := m.installToSelectedTargets()
+	m = updated.(model)
+	if cmd == nil {
+		t.Fatalf("expected first install step command")
+	}
+
+	view := stripANSI(m.View())
+	for _, want := range []string{
+		"Install progress",
+		"Installing 1/4",
+		"Skill agent-rules/go-project-rules",
+		"Target Codex global",
+		"[",
+		"]",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected install progress view to contain %q, got:\n%s", want, view)
+		}
+	}
+}
+
+func TestInstallProgressStopsOnFailedStep(t *testing.T) {
+	m := initialModel(".")
+	m.loading = false
+	m.width = 120
+	m.height = 32
+	m.selected = map[string]bool{
+		"agent-rules/go-project-rules": true,
+	}
+	m.targetChoices = []InstallTargetChoice{
+		{Key: "codex:global", Target: "codex", Label: "Codex global", Scope: "global", Status: "supported", Path: "/tmp/codex", Supported: true},
+		{Key: "claude:global", Target: "claude", Label: "Claude global", Scope: "global", Status: "supported", Path: "/tmp/claude", Supported: true},
+	}
+	m.selectedTargets = map[string]bool{
+		"codex:global":  true,
+		"claude:global": true,
+	}
+
+	updated, _ := m.installToSelectedTargets()
+	m = updated.(model)
+	updated, _ = m.Update(installStepDoneMsg{
+		output: "permission denied\n",
+		err:    fmt.Errorf("exit status 1"),
+	})
+	m = updated.(model)
+
+	if m.busy {
+		t.Fatalf("expected install failure to stop busy state")
+	}
+	if !m.installProgress.Failed {
+		t.Fatalf("expected failed progress state, got %#v", m.installProgress)
+	}
+	view := stripANSI(m.View())
+	for _, want := range []string{
+		"Install failed",
+		"Installing 1/2",
+		"Skill agent-rules/go-project-rules",
+		"Target Codex global",
+		"permission denied",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected failed install progress view to contain %q, got:\n%s", want, view)
+		}
+	}
+}
+
+func TestInstallProgressFailureCanReturnToTargets(t *testing.T) {
+	m := initialModel(".")
+	m.loading = false
+	m.viewMode = viewTargets
+	m.targetPurpose = "install"
+	m.width = 120
+	m.height = 32
+	m.selected = map[string]bool{
+		"agent-rules/go-project-rules": true,
+	}
+	m.targetChoices = []InstallTargetChoice{
+		{Key: "codex:global", Target: "codex", Label: "Codex global", Scope: "global", Status: "supported", Path: "/tmp/codex", Supported: true},
+	}
+	m.selectedTargets = map[string]bool{
+		"codex:global": true,
+	}
+
+	updated, _ := m.installToSelectedTargets()
+	m = updated.(model)
+	updated, _ = m.Update(installStepDoneMsg{output: "permission denied\n", err: fmt.Errorf("exit status 1")})
+	m = updated.(model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
+
+	if m.installProgress.Failed || m.installProgress.Total != 0 {
+		t.Fatalf("expected failed install progress to clear, got %#v", m.installProgress)
+	}
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "Install targets") || strings.Contains(view, "Install failed") {
+		t.Fatalf("expected enter to return to target picker, got:\n%s", view)
 	}
 }
 

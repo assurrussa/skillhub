@@ -207,7 +207,9 @@ The TUI opens as a dashboard with sections for catalog skills, installed skills,
 managed usage, sources, targets, and update commands. The Skills section keeps
 the readable category tree and green `[✓]` selection marker. Press `i` after
 selecting skills to choose one or more supported assistants, then press `enter`
-to install to all selected targets.
+to install to all selected targets. During install the TUI runs one skill-target
+step at a time and shows the current step, target, progress bar, and last
+result line.
 
 The Installed section lists managed and unmanaged `SKILL.md` directories grouped
 by target/scope. Press `u` to update managed skills for the highlighted

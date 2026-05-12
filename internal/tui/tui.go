@@ -2243,7 +2243,7 @@ func (m model) addSourceContent(width int) string {
 		labelLine("Location", input+locationCursor),
 		labelLine("Name", nameInput+nameCursor),
 		"",
-		wrapText("Location expects a local path or git URL, for example https://github.com/mattpocock/skills. Name is optional; use a short id such as mattpocock for generic repository names. Tab switches fields.", width),
+		wrapText("Location expects a local path, git URL, or GitHub tree URL, for example https://github.com/mattpocock/skills. Name is optional; use a short id such as mattpocock for generic repository names. Tab switches fields.", width),
 	}, "\n")
 }
 

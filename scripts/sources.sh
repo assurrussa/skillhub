@@ -27,6 +27,50 @@ derive_source_name() {
   printf '%s\n' "$base"
 }
 
+parse_github_tree_source_url() {
+  url="$1"
+  clean_url=${url%%#*}
+  clean_url=${clean_url%%\?*}
+  clean_url=${clean_url%/}
+
+  case "$clean_url" in
+    http://github.com/*/tree/*|https://github.com/*/tree/*)
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  scheme=${clean_url%%://*}
+  path=${clean_url#*://github.com/}
+  owner=${path%%/*}
+  path=${path#*/}
+  repo=${path%%/*}
+  path=${path#*/}
+
+  case "$path" in
+    tree/*)
+      path=${path#tree/}
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  ref=${path%%/*}
+  tree_path=""
+  if [ "$path" != "$ref" ]; then
+    tree_path=${path#*/}
+  fi
+  repo=${repo%.git}
+
+  if [ -z "$scheme" ] || [ -z "$owner" ] || [ -z "$repo" ] || [ -z "$ref" ]; then
+    return 1
+  fi
+
+  printf '%s\t%s\t%s\n' "$scheme://github.com/$owner/$repo" "$ref" "$tree_path"
+}
+
 validate_source_name_or_exit() {
   name="$1"
   if ! skillhub_is_valid_source_name "$name"; then
@@ -222,6 +266,12 @@ EOF
       exit 1
     fi
     location="$2"
+    tree_ref=""
+    tree_source=$(parse_github_tree_source_url "$location" || true)
+    if [ -n "$tree_source" ]; then
+      location=$(printf '%s\n' "$tree_source" | awk -F '	' '{ print $1 }')
+      tree_ref=$(printf '%s\n' "$tree_source" | awk -F '	' '{ print $2 }')
+    fi
     raw_location="$location"
     path_location=$(skillhub_abs_path "$location" "$(skillhub_caller_cwd)")
     shift 2
@@ -303,7 +353,11 @@ EOF
         ;;
       git)
         if [ -z "$ref" ]; then
-          ref="main"
+          if [ -n "$tree_ref" ]; then
+            ref="$tree_ref"
+          else
+            ref="main"
+          fi
         fi
         ;;
     esac

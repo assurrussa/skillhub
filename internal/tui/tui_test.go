@@ -247,8 +247,8 @@ func TestViewShowsTaskOrientedSkillList(t *testing.T) {
 		"Sources: 1",
 		"Skills",
 		"[ ] go-project-rules",
+		"Source agent-rules",
 		"• go",
-		"source: agent-rules",
 		"Global Go project rules for",
 		"architecture and contracts.",
 		"d presets",
@@ -260,6 +260,52 @@ func TestViewShowsTaskOrientedSkillList(t *testing.T) {
 	}
 	if strings.Contains(view, "Preview") {
 		t.Fatalf("default selector should not render the old preview split, got:\n%s", view)
+	}
+}
+
+func TestSkillsScreenGroupsBySourceThenCategory(t *testing.T) {
+	m := initialModel(".")
+	m.loading = false
+	m.viewMode = viewSkills
+	m.width = 140
+	m.height = 50
+	m.skills = []Skill{
+		{Source: "beta", Name: "zeta", Category: "go", Triggers: "go", Description: "Beta Go skill"},
+		{Source: "alpha", Name: "docs", Category: "documentation", Triggers: "docs", Description: "Alpha docs skill"},
+		{Source: "alpha", Name: "go-project", Category: "go", Triggers: "go", Description: "Alpha Go skill"},
+	}
+	m.applyFilter()
+
+	view := stripANSI(m.View())
+	for _, want := range []string{
+		"Source alpha",
+		"• documentation",
+		"[ ] docs",
+		"• go",
+		"[ ] go-project",
+		"Source beta",
+		"[ ] zeta",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected source-grouped skills view to contain %q, got:\n%s", want, view)
+		}
+	}
+	alphaIndex := strings.Index(view, "Source alpha")
+	betaIndex := strings.Index(view, "Source beta")
+	docsIndex := strings.Index(view, "[ ] docs")
+	goIndex := strings.Index(view, "[ ] go-project")
+	if alphaIndex < 0 || betaIndex < 0 || alphaIndex > betaIndex {
+		t.Fatalf("expected alpha source group before beta, got:\n%s", view)
+	}
+	if docsIndex < 0 || goIndex < 0 || docsIndex > goIndex {
+		t.Fatalf("expected categories to sort inside alpha source, got:\n%s", view)
+	}
+
+	m.search = "beta"
+	m.applyFilter()
+	view = stripANSI(m.View())
+	if !strings.Contains(view, "Source beta") || strings.Contains(view, "Source alpha") {
+		t.Fatalf("expected filtered skills to preserve only matching source group, got:\n%s", view)
 	}
 }
 
@@ -660,6 +706,7 @@ func TestInstalledScreenGroupsRowsByTargetScope(t *testing.T) {
 		"Skills: 3",
 		"Projects: 2",
 		"Managed: 3",
+		"Showing 1-4/4",
 		"[M] managed by Skillhub",
 		"[ ] unmanaged: read-only in TUI",
 		"Global",
@@ -677,6 +724,75 @@ func TestInstalledScreenGroupsRowsByTargetScope(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected installed screen to contain %q, got:\n%s", want, view)
 		}
+	}
+}
+
+func TestInstalledScreenCanScrollToLastProjectSkill(t *testing.T) {
+	m := initialModel(".")
+	m.loading = false
+	m.width = 130
+	m.height = 28
+	m.viewMode = viewInstalled
+	m.installedRows = []InstalledSkill{
+		{Target: "gemini", Scope: "global", Skill: "productivity_caveman", Managed: "yes", Source: "mattpocock", Path: "/tmp/gemini/productivity_caveman"},
+		{Target: "codex", Scope: "project", Skill: "acton", QualifiedSkill: "acton/acton", Managed: "yes", Source: "acton", ProjectPath: "/tmp/tongoldy", Path: "/tmp/tongoldy/.agents/skills/acton"},
+		{Target: "codex", Scope: "project", Skill: "func2tolk", QualifiedSkill: "acton/func2tolk", Managed: "yes", Source: "acton", ProjectPath: "/tmp/tongoldy", Path: "/tmp/tongoldy/.agents/skills/func2tolk"},
+		{Target: "codex", Scope: "project", Skill: "tolk", QualifiedSkill: "acton/tolk", Managed: "yes", Source: "acton", ProjectPath: "/tmp/tongoldy", Path: "/tmp/tongoldy/.agents/skills/tolk"},
+		{Target: "codex", Scope: "project", Skill: "ton-blockchain", QualifiedSkill: "acton/ton-blockchain", Managed: "yes", Source: "acton", ProjectPath: "/tmp/tongoldy", Path: "/tmp/tongoldy/.agents/skills/ton-blockchain"},
+	}
+	sortInstalledRows(m.installedRows)
+	m.ensureInstalledCursorVisible()
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "Showing ") {
+		t.Fatalf("expected constrained installed view to expose a range indicator, got:\n%s", view)
+	}
+
+	for i := 0; i < 4; i++ {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = updated.(model)
+	}
+	view = stripANSI(m.View())
+	if !strings.Contains(view, "ton-blockchain") {
+		t.Fatalf("expected scrolling to reveal last project skill, got:\n%s", view)
+	}
+	if !strings.Contains(view, "Showing ") || !strings.Contains(view, "/5") {
+		t.Fatalf("expected scrolled installed view to include row range, got:\n%s", view)
+	}
+}
+
+func TestInstallReloadFocusesNewProjectRows(t *testing.T) {
+	m := initialModel(".")
+	m.loading = false
+	m.viewMode = viewInstallResult
+	m.width = 130
+	m.height = 40
+	m.installResult = InstallResult{
+		SkillNames: []string{"acton/acton", "acton/func2tolk", "acton/tolk", "acton/ton-blockchain"},
+		Targets: []InstallTargetResult{
+			{Target: "codex", Scope: "project", Label: "Codex project", Root: "/tmp/tongoldy/.agents/skills"},
+		},
+	}
+
+	updated, _ := m.Update(installedLoadedMsg{rows: []InstalledSkill{
+		{Target: "gemini", Scope: "global", Skill: "productivity_caveman", Managed: "yes", Source: "mattpocock", Path: "/tmp/gemini/productivity_caveman"},
+		{Target: "codex", Scope: "project", Skill: "acton", QualifiedSkill: "acton/acton", Managed: "yes", Source: "acton", ProjectPath: "/tmp/tongoldy", Path: "/tmp/tongoldy/.agents/skills/acton"},
+		{Target: "codex", Scope: "project", Skill: "func2tolk", QualifiedSkill: "acton/func2tolk", Managed: "yes", Source: "acton", ProjectPath: "/tmp/tongoldy", Path: "/tmp/tongoldy/.agents/skills/func2tolk"},
+		{Target: "codex", Scope: "project", Skill: "tolk", QualifiedSkill: "acton/tolk", Managed: "yes", Source: "acton", ProjectPath: "/tmp/tongoldy", Path: "/tmp/tongoldy/.agents/skills/tolk"},
+		{Target: "codex", Scope: "project", Skill: "ton-blockchain", QualifiedSkill: "acton/ton-blockchain", Managed: "yes", Source: "acton", ProjectPath: "/tmp/tongoldy", Path: "/tmp/tongoldy/.agents/skills/ton-blockchain"},
+	}})
+	m = updated.(model)
+	if m.installedCursor != 1 || m.installedOffset != 1 {
+		t.Fatalf("expected installed reload to focus first newly installed project row, cursor=%d offset=%d", m.installedCursor, m.installedOffset)
+	}
+
+	m.viewMode = viewInstalled
+	view := stripANSI(m.View())
+	if strings.Contains(view, "productivity_caveman") {
+		t.Fatalf("expected installed view to focus project install group instead of unrelated global row, got:\n%s", view)
+	}
+	if !strings.Contains(view, "acton") || !strings.Contains(view, "func2tolk") {
+		t.Fatalf("expected installed view to show new project install group, got:\n%s", view)
 	}
 }
 
@@ -1462,6 +1578,7 @@ func TestInstallProgressViewShowsCurrentStep(t *testing.T) {
 	for _, want := range []string{
 		"Install progress",
 		"Installing 1/4",
+		"Running",
 		"Skill agent-rules/go-project-rules",
 		"Target Codex global",
 		"[",
@@ -1469,6 +1586,27 @@ func TestInstallProgressViewShowsCurrentStep(t *testing.T) {
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected install progress view to contain %q, got:\n%s", want, view)
+		}
+	}
+}
+
+func TestGenericBusyViewShowsWorkingPanel(t *testing.T) {
+	m := initialModel(".")
+	m.loading = false
+	m.busy = true
+	m.viewMode = viewSources
+	m.status = "Syncing sources..."
+	m.width = 120
+	m.height = 30
+
+	view := stripANSI(m.View())
+	for _, want := range []string{
+		"Working",
+		"Running",
+		"Syncing sources...",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected generic busy view to contain %q, got:\n%s", want, view)
 		}
 	}
 }

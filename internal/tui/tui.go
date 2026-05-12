@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -175,6 +176,7 @@ type model struct {
 	returnToUsageDetails  bool
 	reloadOnFinish        bool
 	postReloadStatus      string
+	spinnerFrame          int
 
 	installScope     string
 	projectDir       string
@@ -229,6 +231,8 @@ type installStepDoneMsg struct {
 	output string
 	err    error
 }
+
+type spinnerTickMsg time.Time
 
 type installQueueItem struct {
 	Skill  string
@@ -327,10 +331,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.ensureCursorVisible()
+		m.ensureInstalledCursorVisible()
 		m.ensureUsageCursorVisible()
 		m.ensureUsageDetailCursorVisible()
 		m.ensureTargetCursorVisible()
 		return m, nil
+	case spinnerTickMsg:
+		if !m.busy {
+			return m, nil
+		}
+		m.spinnerFrame++
+		return m, busyTick()
 	case skillsLoadedMsg:
 		m.loadingSkills = false
 		m.loading = m.currentViewLoading()
@@ -398,6 +409,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.installedRows = msg.rows
+		if m.shouldFocusInstallResultRows() {
+			m.focusInstallResultRows()
+		}
 		if m.installedCursor >= len(m.installedRows) {
 			m.installedCursor = len(m.installedRows) - 1
 		}
@@ -507,7 +521,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.installProgress.Current = m.installProgress.Completed + 1
 		item, _ := m.installProgress.currentItem()
 		m.status = m.installProgressStatus()
-		return m, runInstallStepCommand(m.repoRoot, item, m.projectDir)
+		return m, tea.Batch(runInstallStepCommand(m.repoRoot, item, m.projectDir), busyTick())
 	case commandDoneMsg:
 		m.busy = false
 		if msg.err != nil {
@@ -781,7 +795,7 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "s":
 		m.busy = true
 		m.status = "Syncing sources..."
-		return m, runSourceCommand(m.repoRoot, "Sync", "sync")
+		return m, tea.Batch(runSourceCommand(m.repoRoot, "Sync", "sync"), busyTick())
 	default:
 		return m, nil
 	}
@@ -950,7 +964,7 @@ func (m model) installToSelectedTargets() (tea.Model, tea.Cmd) {
 	}
 	item, _ := m.installProgress.currentItem()
 	m.status = m.installProgressStatus()
-	return m, runInstallStepCommand(m.repoRoot, item, m.projectDir)
+	return m, tea.Batch(runInstallStepCommand(m.repoRoot, item, m.projectDir), busyTick())
 }
 
 func (m model) updateDetailsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1029,7 +1043,7 @@ func (m model) updateInstalledKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.busy = true
 		m.status = fmt.Sprintf("Updating %s/%s managed skills...", row.Target, row.Scope)
-		return m, runInstalledCommand(m.repoRoot, "Update installed", installedUpdateArgsForRow(row, m.projectDir)...)
+		return m, tea.Batch(runInstalledCommand(m.repoRoot, "Update installed", installedUpdateArgsForRow(row, m.projectDir)...), busyTick())
 	case "x":
 		row, ok := m.currentInstalled()
 		if !ok {
@@ -1093,7 +1107,7 @@ func (m model) updateInstalledDetailsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.busy = true
 		m.status = fmt.Sprintf("Updating %s/%s managed skills...", row.Target, row.Scope)
-		return m, runInstalledCommand(m.repoRoot, "Update installed", installedUpdateArgsForRow(row, m.projectDir)...)
+		return m, tea.Batch(runInstalledCommand(m.repoRoot, "Update installed", installedUpdateArgsForRow(row, m.projectDir)...), busyTick())
 	case "x":
 		row, ok := m.currentInstalledDetail()
 		if !ok {
@@ -1178,7 +1192,7 @@ func (m model) updateUsageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.busy = true
 		m.status = "Updating visible project usage for " + summary.Key + "..."
-		return m, runUsageBulkUpdateCommand(m.repoRoot, rows)
+		return m, tea.Batch(runUsageBulkUpdateCommand(m.repoRoot, rows), busyTick())
 	case "U":
 		m.returnToUsageDetails = false
 		rows := m.visibleProjectUsageRows()
@@ -1188,7 +1202,7 @@ func (m model) updateUsageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.busy = true
 		m.status = fmt.Sprintf("Updating %d visible project usage row(s)...", len(rows))
-		return m, runUsageBulkUpdateCommand(m.repoRoot, rows)
+		return m, tea.Batch(runUsageBulkUpdateCommand(m.repoRoot, rows), busyTick())
 	case "r":
 		m.returnToUsageDetails = false
 		return m.reloadCurrentView("Reloading usage...")
@@ -1236,7 +1250,7 @@ func (m model) updateUsageDetailsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.busy = true
 		m.returnToUsageDetails = true
 		m.status = "Updating recorded project usage for " + installedSkillKey(row) + "..."
-		return m, runInstalledCommand(m.repoRoot, "Update usage", usageUpdateArgsForLocation(row)...)
+		return m, tea.Batch(runInstalledCommand(m.repoRoot, "Update usage", usageUpdateArgsForLocation(row)...), busyTick())
 	case "U":
 		rows := projectUsageRows(m.usageDetailRows())
 		if len(rows) == 0 {
@@ -1246,7 +1260,7 @@ func (m model) updateUsageDetailsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.busy = true
 		m.returnToUsageDetails = true
 		m.status = fmt.Sprintf("Updating %d visible project usage row(s)...", len(rows))
-		return m, runUsageBulkUpdateCommand(m.repoRoot, rows)
+		return m, tea.Batch(runUsageBulkUpdateCommand(m.repoRoot, rows), busyTick())
 	case "r":
 		m.loading = true
 		m.returnToUsageDetails = true
@@ -1276,7 +1290,7 @@ func (m model) updateConfirmDeleteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.busy = true
 		m.viewMode = viewInstalled
 		m.status = "Uninstalling " + row.Skill + "..."
-		return m, runInstalledCommand(m.repoRoot, "Uninstall", installedUninstallArgsForRow(row, m.projectDir)...)
+		return m, tea.Batch(runInstalledCommand(m.repoRoot, "Uninstall", installedUninstallArgsForRow(row, m.projectDir)...), busyTick())
 	default:
 		return m, nil
 	}
@@ -1354,7 +1368,7 @@ func (m model) updateSourcesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.busy = true
 		m.reloadOnFinish = true
 		m.status = "Syncing sources..."
-		return m, runSourceCommand(m.repoRoot, "Sync", "sync")
+		return m, tea.Batch(runSourceCommand(m.repoRoot, "Sync", "sync"), busyTick())
 	case "r":
 		return m.reloadCurrentView("Reloading sources...")
 	default:
@@ -1407,7 +1421,7 @@ func (m model) updateAddSourceKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.busy = true
 		m.reloadOnFinish = true
 		m.status = "Adding source " + location + "..."
-		return m, runSourceCommand(m.repoRoot, "Add source", args...)
+		return m, tea.Batch(runSourceCommand(m.repoRoot, "Add source", args...), busyTick())
 	case "backspace":
 		if m.sourceField == 1 {
 			if m.sourceNameInput != "" {
@@ -1450,7 +1464,7 @@ func (m model) updateDefaultsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.busy = true
 		m.reloadOnFinish = true
 		m.status = "Adding source " + source.Name + "..."
-		return m, runSourceCommand(m.repoRoot, "Add source", "defaults", "add", source.Name)
+		return m, tea.Batch(runSourceCommand(m.repoRoot, "Add source", "defaults", "add", source.Name), busyTick())
 	case "n":
 		m.sourceInput = ""
 		m.sourceNameInput = ""
@@ -1566,6 +1580,9 @@ func (m model) renderBody(width int) string {
 		}
 		return m.renderPanel(title, m.installProgressContent(width-6), width)
 	}
+	if m.busy {
+		return m.renderPanel("Working", m.busyContent(width-6), width)
+	}
 	if m.loading {
 		return m.renderPanel(sectionTitle(m.dashboardSection()), statusStyle.Render(m.status), width)
 	}
@@ -1626,15 +1643,24 @@ func (m model) skillsContent(width int) string {
 	if end > len(m.filtered) {
 		end = len(m.filtered)
 	}
-	lastInCategory := m.lastVisibleIndexByCategory(m.offset, end)
+	lastInGroup := m.lastVisibleIndexBySourceCategory(m.offset, end)
+	previousSource := ""
 	previousCategory := ""
 	for row, idx := range m.filtered[m.offset:end] {
 		skill := m.skills[idx]
-		if skill.Category != previousCategory {
+		if skill.Source != previousSource {
 			if row != 0 {
 				fmt.Fprintln(&b)
 			}
-			fmt.Fprintln(&b, categoryStyle.Render("• "+skill.Category))
+			fmt.Fprintln(&b, categoryStyle.Render("Source "+emptyLabel(skill.Source, "-")))
+			previousSource = skill.Source
+			previousCategory = ""
+		}
+		if skill.Category != previousCategory {
+			if row != 0 && previousCategory != "" {
+				fmt.Fprintln(&b)
+			}
+			fmt.Fprintln(&b, treeStyle.Render("  • "+skill.Category))
 			previousCategory = skill.Category
 		}
 
@@ -1643,14 +1669,14 @@ func (m model) skillsContent(width int) string {
 			cursor = "›"
 		}
 		branch := "├─"
-		if lastInCategory[skill.Category] == idx {
+		if lastInGroup[skill.Source+"\x00"+skill.Category] == idx {
 			branch = "└─"
 		}
 		checkbox := checkboxStyle.Render("[ ]")
 		if m.selected[skill.Key()] {
 			checkbox = checkedStyle.Render("[✓]")
 		}
-		title := fmt.Sprintf("%s %s %s %s", cursor, treeStyle.Render(branch), checkbox, skill.Name)
+		title := fmt.Sprintf("%s %s %s %s", cursor, treeStyle.Render("  "+branch), checkbox, skill.Name)
 		locations := m.installedLocationsForSkill(skill)
 		if len(locations) > 0 {
 			title += "   " + projectBadgeStyle.Render("installed: "+installedLocationsBadge(locations))
@@ -1658,12 +1684,16 @@ func (m model) skillsContent(width int) string {
 		if m.offset+row == m.cursor {
 			title = activeRowStyle.Render(title)
 		}
-		description := indent(wrapText(skill.Description, width-8), "      ")
-		meta := "      source: " + skill.Source
+		description := indent(wrapText(skill.Description, width-8), "        ")
+		meta := ""
 		if strings.TrimSpace(skill.Triggers) != "" {
-			meta += "   triggers: " + truncate(skill.Triggers, max(16, width-lipgloss.Width(meta)-13))
+			meta = "        triggers: " + truncate(skill.Triggers, max(16, width-18))
 		}
-		card := strings.Join([]string{title, description, subtleStyle.Render(meta)}, "\n")
+		cardLines := []string{title, description}
+		if strings.TrimSpace(meta) != "" {
+			cardLines = append(cardLines, subtleStyle.Render(meta))
+		}
+		card := strings.Join(cardLines, "\n")
 		if m.selected[skill.Key()] {
 			card = selectedRowStyle.Render(card)
 		}
@@ -1831,6 +1861,8 @@ func (m model) installedContent(width int) string {
 		badgeStyle.Render(fmt.Sprintf("Projects: %d", stats.Projects)),
 		badgeStyle.Render(fmt.Sprintf("Managed: %d", stats.Managed)),
 	)
+	fmt.Fprintln(&b)
+	fmt.Fprintln(&b, subtleStyle.Render(m.installedRangeLabel()))
 	fmt.Fprintln(&b)
 	fmt.Fprintln(&b, legend)
 	fmt.Fprintln(&b)
@@ -2104,6 +2136,11 @@ func (m model) installProgressContent(width int) string {
 	var b strings.Builder
 	fmt.Fprintln(&b, titleStyle.Render(title))
 	fmt.Fprintln(&b)
+	if m.installProgress.Failed {
+		fmt.Fprintln(&b, "Stopped")
+	} else {
+		fmt.Fprintf(&b, "Running %s\n", m.spinnerView())
+	}
 	fmt.Fprintf(&b, "Skill %s\n", item.Skill)
 	fmt.Fprintf(&b, "Target %s\n", item.Choice.Label)
 	if strings.TrimSpace(item.Choice.Path) != "" {
@@ -2122,6 +2159,19 @@ func (m model) installProgressContent(width int) string {
 		fmt.Fprintln(&b, indent(wrapText(m.installProgress.Error, max(12, width-2)), "  "))
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) busyContent(width int) string {
+	status := strings.TrimSpace(m.status)
+	if status == "" {
+		status = "Working..."
+	}
+	lines := []string{
+		fmt.Sprintf("Running %s", m.spinnerView()),
+		"",
+		wrapText(status, width),
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m model) installResultContent(width int) string {
@@ -2398,6 +2448,9 @@ func (m *model) applyFilter() {
 	sort.SliceStable(m.filtered, func(i, j int) bool {
 		left := m.skills[m.filtered[i]]
 		right := m.skills[m.filtered[j]]
+		if left.Source != right.Source {
+			return left.Source < right.Source
+		}
 		if left.Category != right.Category {
 			return left.Category < right.Category
 		}
@@ -2471,6 +2524,15 @@ func (m model) lastVisibleIndexByCategory(start, end int) map[string]int {
 	result := map[string]int{}
 	for _, idx := range m.filtered[start:end] {
 		result[m.skills[idx].Category] = idx
+	}
+	return result
+}
+
+func (m model) lastVisibleIndexBySourceCategory(start, end int) map[string]int {
+	result := map[string]int{}
+	for _, idx := range m.filtered[start:end] {
+		skill := m.skills[idx]
+		result[skill.Source+"\x00"+skill.Category] = idx
 	}
 	return result
 }
@@ -2586,11 +2648,25 @@ func (m model) visibleCount() int {
 	return count
 }
 
+func (m model) panelBodyBudget() int {
+	if m.bodyHeight > 0 {
+		return m.bodyHeight - panelChromeHeight()
+	}
+	if m.height > 0 {
+		return m.height - 14
+	}
+	return 0
+}
+
 func (m model) installedVisibleCount() int {
 	if m.height <= 0 {
 		return 6
 	}
-	count := (m.height - 14) / 4
+	budget := m.panelBodyBudget()
+	if budget <= 0 {
+		budget = m.height - 14
+	}
+	count := (budget - 8) / 4
 	if count < 1 {
 		return 1
 	}
@@ -2875,6 +2951,48 @@ func installedOverviewStats(rows []InstalledSkill) installedStats {
 	stats.Skills = len(skills)
 	stats.Projects = len(projects)
 	return stats
+}
+
+func (m model) installedRangeLabel() string {
+	total := len(m.installedRows)
+	if total == 0 {
+		return "Showing 0/0"
+	}
+	visible := m.installedVisibleCount()
+	start := m.installedOffset + 1
+	end := m.installedOffset + visible
+	if end > total {
+		end = total
+	}
+	return fmt.Sprintf("Showing %d-%d/%d", start, end, total)
+}
+
+func (m model) shouldFocusInstallResultRows() bool {
+	return m.viewMode == viewInstallResult && len(m.installResult.SkillNames) > 0 && len(m.installedRows) > 0
+}
+
+func (m *model) focusInstallResultRows() {
+	wanted := map[string]bool{}
+	for _, name := range m.installResult.SkillNames {
+		wanted[name] = true
+	}
+	for i, row := range m.installedRows {
+		if installedRowMatchesAnyName(row, wanted) {
+			m.installedCursor = i
+			m.installedOffset = i
+			return
+		}
+	}
+}
+
+func installedRowMatchesAnyName(row InstalledSkill, wanted map[string]bool) bool {
+	if wanted[row.QualifiedSkill] {
+		return true
+	}
+	if strings.TrimSpace(row.Source) != "" && row.Source != "-" && wanted[row.Source+"/"+row.Skill] {
+		return true
+	}
+	return wanted[row.Skill]
 }
 
 func buildUsageSummaries(rows []InstalledSkill) []UsageSummary {
@@ -3679,6 +3797,17 @@ func (m model) installProgressStatus() string {
 		return "Installing..."
 	}
 	return fmt.Sprintf("Installing %d/%d: %s -> %s.", m.installProgress.Current, m.installProgress.Total, item.Skill, item.Choice.Label)
+}
+
+func (m model) spinnerView() string {
+	frames := []string{"|", "/", "-", "\\"}
+	return frames[m.spinnerFrame%len(frames)]
+}
+
+func busyTick() tea.Cmd {
+	return tea.Tick(120*time.Millisecond, func(t time.Time) tea.Msg {
+		return spinnerTickMsg(t)
+	})
 }
 
 func installProgressBar(completed, total, width int) string {

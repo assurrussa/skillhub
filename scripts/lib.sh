@@ -216,6 +216,11 @@ skillhub_materialize_source() {
         rel=$(basename -- "$skill_dir")
         ;;
     esac
+    case "$rel" in
+      .*|*/.*)
+        continue
+        ;;
+    esac
     flat_name=$(printf '%s' "$rel" | tr '/' '_')
     case "$flat_name" in
       ''|*[!a-z0-9_-]*)
@@ -224,7 +229,7 @@ skillhub_materialize_source() {
         ;;
     esac
 
-    if grep -F "$flat_name	" "$seen_file" >/dev/null 2>&1; then
+    if awk -F '	' -v wanted="$flat_name" '$1 == wanted { found = 1 } END { exit(found ? 0 : 1) }' "$seen_file"; then
       previous=$(awk -F '	' -v wanted="$flat_name" '$1 == wanted { print $2; exit }' "$seen_file")
       printf 'Duplicate generated skill name %s in source %s: %s and %s\n' "$flat_name" "$source_name" "$previous" "$rel" >&2
       return 1

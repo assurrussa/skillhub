@@ -437,6 +437,59 @@ func TestSourcesAddGitPerformsInitialSync(t *testing.T) {
 	}
 }
 
+func TestSourcesAddGitHubTreeURLUsesRepositoryAndBranch(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	sourceDir := filepath.Join(tmp, "acton-contracts")
+	writeNestedSkill(t, sourceDir, "func2tolk", "FunC to Tolk migration", "Func2tolk")
+	writeNestedSkill(t, sourceDir, "tolk", "Tolk contracts", "Tolk")
+	runGit(t, sourceDir, "init")
+	runGit(t, sourceDir, "checkout", "-b", "main")
+	commitGitSource(t, sourceDir, "initial Acton-like skills")
+	writeRootSkill(t, sourceDir, ".acton-skill", "Internal Acton metadata", "Internal")
+	commitGitSource(t, sourceDir, "add hidden metadata skill")
+	runGit(t, sourceDir, "checkout", "-b", "skills")
+
+	gitConfig := filepath.Join(tmp, "gitconfig")
+	gitConfigContent := "[url \"file://" + filepath.ToSlash(sourceDir) + "\"]\n" +
+		"\tinsteadOf = https://github.com/ton-blockchain/acton-contracts\n"
+	if err := os.WriteFile(gitConfig, []byte(gitConfigContent), 0o644); err != nil {
+		t.Fatalf("write git config: %v", err)
+	}
+
+	stdout, stderr, err := runScriptSplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+		"GIT_CONFIG_GLOBAL=" + gitConfig,
+	}, "scripts/sources.sh", "add", "https://github.com/ton-blockchain/acton-contracts/tree/skills/skills/", "--name", "acton")
+	if err != nil {
+		t.Fatalf("sources add GitHub tree URL failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Added source acton") {
+		t.Fatalf("expected add output, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+
+	stdout, stderr, err = runScriptSplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "scripts/sources.sh", "list", "--tsv")
+	if err != nil {
+		t.Fatalf("sources list failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "acton\tgit\thttps://github.com/ton-blockchain/acton-contracts\tskills\tcatalog/skills.tsv") {
+		t.Fatalf("expected normalized GitHub tree source row, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+
+	catalog, err := os.ReadFile(filepath.Join(cacheDir, "generated-sources", "acton", "catalog", "skills.tsv"))
+	if err != nil {
+		t.Fatalf("read generated catalog: %v", err)
+	}
+	if !strings.Contains(string(catalog), "func2tolk\tfunc2tolk\t") || !strings.Contains(string(catalog), "tolk\ttolk\t") {
+		t.Fatalf("expected generated catalog to include func2tolk and tolk without false duplicates, got:\n%s", catalog)
+	}
+}
+
 func TestSourcesAddGitReusesNameWithDifferentLocationRefreshesCache(t *testing.T) {
 	tmp := t.TempDir()
 	configDir := filepath.Join(tmp, "config")

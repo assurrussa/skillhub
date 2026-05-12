@@ -892,7 +892,7 @@ func TestAddSourceEmptyFieldsDoNotLookPreFilled(t *testing.T) {
 	if !strings.Contains(view, "Location  _") {
 		t.Fatalf("expected empty active location field to show only cursor, got:\n%s", view)
 	}
-	if !strings.Contains(view, "Location expects a local path or git URL") {
+	if !strings.Contains(view, "Location expects a local path, git URL, or GitHub tree URL") {
 		t.Fatalf("expected field help to explain source location, got:\n%s", view)
 	}
 }

@@ -116,6 +116,15 @@ skillhub install mattpocock/engineering_tdd --target codex --scope global
 skillhub install some-source/engineering_tdd --target claude --scope project
 ```
 
+GitHub tree URLs for branch-specific skill collections are normalized to the
+repository URL and branch ref:
+
+```sh
+skillhub sources add https://github.com/example/skills-repo/tree/agent-skills/skills/ --name example
+# equivalent:
+skillhub sources add https://github.com/example/skills-repo --name example --ref agent-skills
+```
+
 For local development, point the source at a checkout instead of cloning:
 
 ```sh

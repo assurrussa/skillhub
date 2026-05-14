@@ -1,7 +1,7 @@
-package tui
+package tui_test
 
 import (
-	"fmt"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -12,9 +12,78 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/assurrussa/skillhub/internal/core"
+	tui "github.com/assurrussa/skillhub/internal/tui"
 )
 
 var ansiRE = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+
+const (
+	testSkillGoProjectRules  = "go-project-rules"
+	testSkillRulesSelector   = "rules-selector"
+	testSkillDocsProject     = "docs-project-rules"
+	testSkillManual          = "manual-skill"
+	testSkillActon           = "acton"
+	testSkillGrillMe         = "productivity_grill-me"
+	testSourceAgentRules     = "agent-rules"
+	testSourceMattPocock     = "mattpocock"
+	testSourceActon          = "acton"
+	testSourceAlpha          = "alpha"
+	testSourceBeta           = "beta"
+	testProjectPath          = "/tmp/project"
+	testProjectA             = "/tmp/project-a"
+	testProjectB             = "/tmp/project-b"
+	testProjectTongoldy      = "/tmp/tongoldy"
+	testProjectSkillsRoot    = "/tmp/project/.agents/skills"
+	testSkillsRoot           = "/tmp/skills"
+	testTimestampInstalled   = "2026-05-05T00:00:00Z"
+	testTimestampUsage       = "2026-05-05T01:00:00Z"
+	testTimestampLatest      = "2026-05-05T03:00:00Z"
+	testDescGoProjectRules   = "Go project rules"
+	testDescGoRules          = "Go rules"
+	testDescGrillMe          = "Grill me"
+	testDocsCategory         = "documentation"
+	testDocsTrigger          = "docs"
+	testQualifiedGoRules     = "agent-rules/go-project-rules"
+	testQualifiedRules       = "agent-rules/rules-selector"
+	testQualifiedGrillMe     = "mattpocock/productivity_grill-me"
+	testGoRulesPath          = "/tmp/skills/go-project-rules"
+	testManualSkillPath      = "/tmp/project/.claude/skills/manual-skill"
+	testProjectBGeminiPath   = "/tmp/project-b/.gemini/skills/rules-selector"
+	testGrillMeClaudePath    = "/home/me/.claude/skills/productivity_grill-me"
+	testLabelCodexGlobal     = "Codex global"
+	testLabelClaudeGlobal    = "Claude global"
+	testFlagTarget           = "--target"
+	testCommandAdd           = "add"
+	testCodexProjectKey      = "codex:project"
+	testCodexGlobalKey       = "codex:global"
+	testClaudeGlobalKey      = "claude:global"
+	testCodexSkillsDesc      = "Codex skills"
+	testClaudeSkillsDesc     = "Claude skills"
+	testTargetOpenCode       = "opencode"
+	testLabelCursor          = "Cursor"
+	testAdapterSkillDir      = "skill-dir"
+	testStatusSupported      = "supported"
+	testStatusPlanned        = "planned"
+	testDescPlanned          = "Planned"
+	testBulletGo             = "• go"
+	testHashABC              = "abc"
+	testProjectRulesPath     = "/tmp/project/.agents/skills/rules-selector"
+	testGlobalRulesPath      = "/tmp/global/rules-selector"
+	testRecordedProject      = "/tmp/recorded-project"
+	testLegacyRulesPath      = "/tmp/legacy-skills/rules-selector"
+	testSourceURL            = "https://github.com/mattpocock/skills"
+	testTriggerGrill         = "grill"
+	testTriggerGoGolang      = "go,golang"
+	testCategoryProductivity = "productivity"
+	testTargetCursor         = "cursor"
+	testLabelOpenCode        = "OpenCode"
+	testGeminiSkillsDesc     = "Gemini skills"
+	testOpenCodeSkillsDesc   = "OpenCode skills"
+	testCommandUsage         = "usage"
+	commandUpdate            = "update"
+)
 
 func stripANSI(value string) string {
 	return ansiRE.ReplaceAllString(value, "")
@@ -27,6 +96,79 @@ func testRepoRoot(t *testing.T) string {
 		t.Fatalf("resolve repo root: %v", err)
 	}
 	return root
+}
+
+func asModel(t *testing.T, tm tea.Model) tui.TestModel {
+	t.Helper()
+	m, ok := tm.(tui.TestModel)
+	if !ok {
+		t.Fatalf("expected tui.TestModel, got %T", tm)
+	}
+	return m
+}
+
+func actonInstalledRows() []tui.InstalledSkill {
+	return []tui.InstalledSkill{
+		{
+			Target: tui.TargetGemini, Scope: tui.ScopeGlobal, Skill: "productivity_caveman",
+			Managed: tui.ManagedYes, Source: testSourceMattPocock, Path: "/tmp/gemini/productivity_caveman",
+		},
+		{
+			Target: tui.TargetCodex, Scope: tui.ScopeProject, Skill: testSourceActon, QualifiedSkill: "acton/acton",
+			Managed: tui.ManagedYes, Source: testSourceActon, ProjectPath: testProjectTongoldy,
+			Path: "/tmp/tongoldy/.agents/skills/acton",
+		},
+		{
+			Target: tui.TargetCodex, Scope: tui.ScopeProject, Skill: "func2tolk", QualifiedSkill: "acton/func2tolk",
+			Managed: tui.ManagedYes, Source: testSourceActon, ProjectPath: testProjectTongoldy,
+			Path: "/tmp/tongoldy/.agents/skills/func2tolk",
+		},
+		{
+			Target: tui.TargetCodex, Scope: tui.ScopeProject, Skill: "tolk", QualifiedSkill: "acton/tolk",
+			Managed: tui.ManagedYes, Source: testSourceActon, ProjectPath: testProjectTongoldy,
+			Path: "/tmp/tongoldy/.agents/skills/tolk",
+		},
+		{
+			Target: tui.TargetCodex, Scope: tui.ScopeProject, Skill: "ton-blockchain",
+			QualifiedSkill: "acton/ton-blockchain", Managed: tui.ManagedYes, Source: testSourceActon,
+			ProjectPath: testProjectTongoldy, Path: "/tmp/tongoldy/.agents/skills/ton-blockchain",
+		},
+	}
+}
+
+func testManagedInstalled(path string) tui.InstalledSkill {
+	return tui.InstalledSkill{
+		Target: tui.TargetCodex, Scope: tui.ScopeGlobal, Skill: testSkillRulesSelector,
+		Managed: tui.ManagedYes, Source: testSourceAgentRules, Path: path,
+	}
+}
+
+func testManagedUsage(source, skill, target, scope, projectPath, path string) tui.InstalledSkill {
+	return tui.InstalledSkill{
+		Source: source, Skill: skill, Managed: tui.ManagedYes,
+		Target: target, Scope: scope, ProjectPath: projectPath, Path: path,
+	}
+}
+
+func testTargetChoice(key, target, label, scope, path string) tui.InstallTargetChoice {
+	return tui.InstallTargetChoice{
+		Key: key, Target: target, Label: label,
+		Scope: scope, Status: tui.TargetStatusSupported, Path: path, Supported: true,
+	}
+}
+
+func testSupportedTarget(id, label, description string) tui.Target {
+	return tui.Target{
+		ID: id, Label: label, Status: testStatusSupported,
+		Adapter: testAdapterSkillDir, Description: description,
+	}
+}
+
+func testPlannedTarget(id, label string) tui.Target {
+	return tui.Target{
+		ID: id, Label: label, Status: testStatusPlanned,
+		Adapter: testStatusPlanned, Description: testDescPlanned,
+	}
 }
 
 func writeTUIGitSourceConfig(t *testing.T, configDir, cacheDir, name string, syncedAt time.Time) {
@@ -45,7 +187,7 @@ func writeTUIGitSourceConfig(t *testing.T, configDir, cacheDir, name string, syn
 		t.Fatalf("mkdir catalog: %v", err)
 	}
 	catalog := "name\tcategory\ttriggers\tdescription\n" +
-		"go-project-rules\tgo\tgo,golang,go.mod\tGo rules\n"
+		testSkillGoProjectRules + "\tgo\tgo,golang,go.mod\tGo rules\n"
 	if err := os.WriteFile(filepath.Join(catalogDir, "skills.tsv"), []byte(catalog), 0o644); err != nil {
 		t.Fatalf("write catalog: %v", err)
 	}
@@ -80,19 +222,88 @@ func writeTUINestedPathSource(t *testing.T, configDir, sourceDir string) {
 	}
 }
 
+func writeFakeTUIRepo(t *testing.T, root string) {
+	t.Helper()
+	for _, dir := range []string{"defaults", "targets"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatalf("mkdir fake repo dir %s: %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(
+		filepath.Join(root, "defaults", "sources.tsv"),
+		[]byte("name\ttype\tlocation\tref\tcatalog\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write fake defaults: %v", err)
+	}
+	targets := "id\tlabel\tstatus\tadapter\tdescription\n" +
+		"codex\tCodex\tsupported\tskill-dir\tCodex skills\n" +
+		"claude\tClaude\tsupported\tskill-dir\tClaude skills\n"
+	if err := os.WriteFile(filepath.Join(root, "targets", "targets.tsv"), []byte(targets), 0o644); err != nil {
+		t.Fatalf("write fake targets: %v", err)
+	}
+}
+
 func TestParseSkillsTSV(t *testing.T) {
 	input := "source\tname\tcategory\ttriggers\tdescription\n" +
-		"agent-rules\tgo-project-rules\tgo\tgo,golang\tGo project rules\n"
+		testSourceAgentRules + "\t" + testSkillGoProjectRules + "\tgo\tgo,golang\tGo project rules\n"
 
-	skills, err := parseSkillsTSV(input)
+	skills, err := tui.ParseSkillsTSV(input)
 	if err != nil {
-		t.Fatalf("parseSkillsTSV returned error: %v", err)
+		t.Fatalf("tui.ParseSkillsTSV returned error: %v", err)
 	}
 	if len(skills) != 1 {
 		t.Fatalf("expected 1 skill, got %d", len(skills))
 	}
-	if skills[0].Name != "go-project-rules" || skills[0].Category != "go" {
+	if skills[0].Name != testSkillGoProjectRules || skills[0].Category != "go" {
 		t.Fatalf("unexpected skill: %#v", skills[0])
+	}
+}
+
+func TestLoadSkillsUsesGoBackend(t *testing.T) {
+	tmp := t.TempDir()
+	repo := filepath.Join(tmp, "repo")
+	configDir := filepath.Join(tmp, "config")
+	sourceDir := filepath.Join(tmp, "source")
+	writeFakeTUIRepo(t, repo)
+	writeTUINestedPathSource(t, configDir, sourceDir)
+	t.Setenv("SKILLHUB_CONFIG_DIR", configDir)
+	t.Setenv("SKILLHUB_CACHE_DIR", filepath.Join(tmp, "cache"))
+
+	msg := tui.LoadSkills(repo)()
+	loaded, ok := msg.(tui.SkillsLoadedMsg)
+	if !ok {
+		t.Fatalf("expected tui.SkillsLoadedMsg, got %T", msg)
+	}
+	if loaded.Err != nil {
+		t.Fatalf("tui.LoadSkills should use Go backend, got error: %v", loaded.Err)
+	}
+	if len(loaded.Skills) != 1 || loaded.Skills[0].Name != "engineering_tdd" {
+		t.Fatalf("unexpected loaded Skills: %#v", loaded.Skills)
+	}
+}
+
+func TestSkillsLoadedNoSourcesFromGoBackendShowsPresetPrompt(t *testing.T) {
+	model := tui.InitialModel(testRepoRoot(t))
+	model.Loading = true
+	model.LoadingSkills = true
+	model.ViewMode = tui.ViewSkills
+
+	updated, _ := model.Update(tui.SkillsLoadedMsg{
+		Err: errors.New("no sources configured. Run: skillhub sources defaults list"),
+	})
+	got, ok := updated.(tui.TestModel)
+	if !ok {
+		t.Fatalf("expected tui.TestModel, got %T", updated)
+	}
+	if !got.NoSources {
+		t.Fatalf("expected no-sources state")
+	}
+	if got.Loading || got.LoadingSkills {
+		t.Fatalf("expected loading flags to clear, loading=%v loadingSkills=%v", got.Loading, got.LoadingSkills)
+	}
+	if !strings.Contains(got.Status, "Press d for presets") {
+		t.Fatalf("expected preset prompt status, got %q", got.Status)
 	}
 }
 
@@ -104,16 +315,16 @@ func TestLoadSkillsUsesCachedCatalog(t *testing.T) {
 	t.Setenv("SKILLHUB_CONFIG_DIR", configDir)
 	t.Setenv("SKILLHUB_CACHE_DIR", cacheDir)
 
-	msg := loadSkills(testRepoRoot(t))()
-	loaded, ok := msg.(skillsLoadedMsg)
+	msg := tui.LoadSkills(testRepoRoot(t))()
+	loaded, ok := msg.(tui.SkillsLoadedMsg)
 	if !ok {
-		t.Fatalf("expected skillsLoadedMsg, got %T", msg)
+		t.Fatalf("expected tui.SkillsLoadedMsg, got %T", msg)
 	}
-	if loaded.err != nil {
-		t.Fatalf("loadSkills returned error: %v", loaded.err)
+	if loaded.Err != nil {
+		t.Fatalf("tui.LoadSkills returned error: %v", loaded.Err)
 	}
-	if len(loaded.skills) != 1 || loaded.skills[0].Name != "go-project-rules" {
-		t.Fatalf("unexpected loaded skills: %#v", loaded.skills)
+	if len(loaded.Skills) != 1 || loaded.Skills[0].Name != testSkillGoProjectRules {
+		t.Fatalf("unexpected loaded Skills: %#v", loaded.Skills)
 	}
 }
 
@@ -125,21 +336,21 @@ func TestLoadSkillsShowsStaleCacheWarningInStatus(t *testing.T) {
 	t.Setenv("SKILLHUB_CONFIG_DIR", configDir)
 	t.Setenv("SKILLHUB_CACHE_DIR", cacheDir)
 
-	msg := loadSkills(testRepoRoot(t))()
-	loaded, ok := msg.(skillsLoadedMsg)
+	msg := tui.LoadSkills(testRepoRoot(t))()
+	loaded, ok := msg.(tui.SkillsLoadedMsg)
 	if !ok {
-		t.Fatalf("expected skillsLoadedMsg, got %T", msg)
+		t.Fatalf("expected tui.SkillsLoadedMsg, got %T", msg)
 	}
-	if loaded.err != nil {
-		t.Fatalf("loadSkills should use stale cache: %v", loaded.err)
+	if loaded.Err != nil {
+		t.Fatalf("tui.LoadSkills should use stale cache: %v", loaded.Err)
 	}
 
-	m := initialModel(testRepoRoot(t))
-	m.viewMode = viewSkills
+	m := tui.InitialModel(testRepoRoot(t))
+	m.ViewMode = tui.ViewSkills
 	updated, _ := m.Update(loaded)
-	m = updated.(model)
-	if !strings.Contains(m.status, "stale cache") {
-		t.Fatalf("expected stale cache warning in status, got %q", m.status)
+	m = asModel(t, updated)
+	if !strings.Contains(m.Status, "stale cache") {
+		t.Fatalf("expected stale cache warning in status, got %q", m.Status)
 	}
 }
 
@@ -152,50 +363,62 @@ func TestLoadSkillsUsesGeneratedNestedCatalog(t *testing.T) {
 	t.Setenv("SKILLHUB_CONFIG_DIR", configDir)
 	t.Setenv("SKILLHUB_CACHE_DIR", cacheDir)
 
-	msg := loadSkills(testRepoRoot(t))()
-	loaded, ok := msg.(skillsLoadedMsg)
+	msg := tui.LoadSkills(testRepoRoot(t))()
+	loaded, ok := msg.(tui.SkillsLoadedMsg)
 	if !ok {
-		t.Fatalf("expected skillsLoadedMsg, got %T", msg)
+		t.Fatalf("expected tui.SkillsLoadedMsg, got %T", msg)
 	}
-	if loaded.err != nil {
-		t.Fatalf("loadSkills returned error: %v", loaded.err)
+	if loaded.Err != nil {
+		t.Fatalf("tui.LoadSkills returned error: %v", loaded.Err)
 	}
-	if len(loaded.skills) != 1 || loaded.skills[0].Name != "engineering_tdd" || loaded.skills[0].Category != "engineering" {
-		t.Fatalf("unexpected generated nested skills: %#v", loaded.skills)
+	if len(loaded.Skills) != 1 ||
+		loaded.Skills[0].Name != "engineering_tdd" ||
+		loaded.Skills[0].Category != "engineering" {
+		t.Fatalf("unexpected generated nested Skills: %#v", loaded.Skills)
 	}
 }
 
 func TestApplyFilterMatchesDescriptionAndTriggers(t *testing.T) {
-	m := initialModel(".")
-	m.skills = []Skill{
-		{Source: "agent-rules", Name: "go-project-rules", Category: "go", Triggers: "go,golang", Description: "Go project rules"},
-		{Source: "agent-rules", Name: "docs-project-rules", Category: "documentation", Triggers: "docs", Description: "Documentation rules"},
+	m := tui.InitialModel(".")
+	m.Skills = []tui.Skill{
+		{
+			Source: testSourceAgentRules, Name: testSkillGoProjectRules,
+			Category: "go", Triggers: testTriggerGoGolang,
+			Description: testDescGoProjectRules,
+		},
+		{
+			Source:      testSourceAgentRules,
+			Name:        testSkillDocsProject,
+			Category:    testDocsCategory,
+			Triggers:    testDocsTrigger,
+			Description: "Documentation rules",
+		},
 	}
-	m.search = "golang"
-	m.applyFilter()
+	m.Search = "golang"
+	m.ApplyFilter()
 
-	if len(m.filtered) != 1 {
-		t.Fatalf("expected 1 filtered skill, got %d", len(m.filtered))
+	if len(m.Filtered) != 1 {
+		t.Fatalf("expected 1 filtered skill, got %d", len(m.Filtered))
 	}
-	if m.skills[m.filtered[0]].Name != "go-project-rules" {
-		t.Fatalf("unexpected filtered skill: %#v", m.skills[m.filtered[0]])
+	if m.Skills[m.Filtered[0]].Name != testSkillGoProjectRules {
+		t.Fatalf("unexpected filtered skill: %#v", m.Skills[m.Filtered[0]])
 	}
 }
 
 func TestSelectionUsesQualifiedSkillNames(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.skills = []Skill{
-		{Source: "alpha", Name: "same-name", Category: "go", Description: "Alpha"},
-		{Source: "beta", Name: "same-name", Category: "go", Description: "Beta"},
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.Skills = []tui.Skill{
+		{Source: testSourceAlpha, Name: "same-name", Category: "go", Description: "Alpha"},
+		{Source: testSourceBeta, Name: "same-name", Category: "go", Description: "Beta"},
 	}
-	m.applyFilter()
+	m.ApplyFilter()
 
-	m.toggleCurrent()
-	m.cursor = 1
-	m.toggleCurrent()
+	m.ToggleCurrent()
+	m.Cursor = 1
+	m.ToggleCurrent()
 
-	got := m.selectedNames()
+	got := m.SelectedNames()
 	want := []string{"alpha/same-name", "beta/same-name"}
 	if len(got) != len(want) {
 		t.Fatalf("expected %d selected names, got %d: %#v", len(want), len(got), got)
@@ -208,38 +431,38 @@ func TestSelectionUsesQualifiedSkillNames(t *testing.T) {
 }
 
 func TestViewShowsSourceColumn(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.viewMode = viewSkills
-	m.width = 120
-	m.height = 20
-	m.skills = []Skill{
-		{Source: "agent-rules", Name: "go-project-rules", Category: "go", Description: "Go project rules"},
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewSkills
+	m.Width = 120
+	m.Height = 20
+	m.Skills = []tui.Skill{
+		{Source: testSourceAgentRules, Name: testSkillGoProjectRules, Category: "go", Description: testDescGoProjectRules},
 	}
-	m.applyFilter()
+	m.ApplyFilter()
 
 	view := m.View()
-	if !strings.Contains(view, "agent-rules") {
+	if !strings.Contains(view, testSourceAgentRules) {
 		t.Fatalf("expected view to include source name, got:\n%s", view)
 	}
 }
 
 func TestViewShowsTaskOrientedSkillList(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.viewMode = viewSkills
-	m.width = 120
-	m.height = 30
-	m.skills = []Skill{
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewSkills
+	m.Width = 120
+	m.Height = 30
+	m.Skills = []tui.Skill{
 		{
-			Source:      "agent-rules",
-			Name:        "go-project-rules",
+			Source:      testSourceAgentRules,
+			Name:        testSkillGoProjectRules,
 			Category:    "go",
 			Triggers:    "go,golang,go.mod",
 			Description: "Global Go project rules for architecture and contracts.",
 		},
 	}
-	m.applyFilter()
+	m.ApplyFilter()
 
 	view := stripANSI(m.View())
 	for _, want := range []string{
@@ -248,7 +471,7 @@ func TestViewShowsTaskOrientedSkillList(t *testing.T) {
 		"Skills",
 		"[ ] go-project-rules",
 		"Source agent-rules",
-		"• go",
+		testBulletGo,
 		"Global Go project rules for",
 		"architecture and contracts.",
 		"d presets",
@@ -264,24 +487,28 @@ func TestViewShowsTaskOrientedSkillList(t *testing.T) {
 }
 
 func TestSkillsScreenGroupsBySourceThenCategory(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.viewMode = viewSkills
-	m.width = 140
-	m.height = 50
-	m.skills = []Skill{
-		{Source: "beta", Name: "zeta", Category: "go", Triggers: "go", Description: "Beta Go skill"},
-		{Source: "alpha", Name: "docs", Category: "documentation", Triggers: "docs", Description: "Alpha docs skill"},
-		{Source: "alpha", Name: "go-project", Category: "go", Triggers: "go", Description: "Alpha Go skill"},
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewSkills
+	m.Width = 140
+	m.Height = 50
+	m.Skills = []tui.Skill{
+		{Source: testSourceBeta, Name: "zeta", Category: "go", Triggers: "go", Description: "Beta Go skill"},
+		{
+			Source: testSourceAlpha, Name: testDocsTrigger,
+			Category: testDocsCategory, Triggers: testDocsTrigger,
+			Description: "Alpha docs skill",
+		},
+		{Source: testSourceAlpha, Name: "go-project", Category: "go", Triggers: "go", Description: "Alpha Go skill"},
 	}
-	m.applyFilter()
+	m.ApplyFilter()
 
 	view := stripANSI(m.View())
 	for _, want := range []string{
 		"Source alpha",
 		"• documentation",
 		"[ ] docs",
-		"• go",
+		testBulletGo,
 		"[ ] go-project",
 		"Source beta",
 		"[ ] zeta",
@@ -301,8 +528,8 @@ func TestSkillsScreenGroupsBySourceThenCategory(t *testing.T) {
 		t.Fatalf("expected categories to sort inside alpha source, got:\n%s", view)
 	}
 
-	m.search = "beta"
-	m.applyFilter()
+	m.Search = testSourceBeta
+	m.ApplyFilter()
 	view = stripANSI(m.View())
 	if !strings.Contains(view, "Source beta") || strings.Contains(view, "Source alpha") {
 		t.Fatalf("expected filtered skills to preserve only matching source group, got:\n%s", view)
@@ -310,14 +537,14 @@ func TestSkillsScreenGroupsBySourceThenCategory(t *testing.T) {
 }
 
 func TestDashboardRendersSectionNavigation(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.width = 120
-	m.height = 30
-	m.skills = []Skill{
-		{Source: "agent-rules", Name: "go-project-rules", Category: "go", Description: "Go rules"},
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.Width = 120
+	m.Height = 30
+	m.Skills = []tui.Skill{
+		{Source: testSourceAgentRules, Name: testSkillGoProjectRules, Category: "go", Description: testDescGoRules},
 	}
-	m.applyFilter()
+	m.ApplyFilter()
 
 	view := stripANSI(m.View())
 	for _, want := range []string{
@@ -335,64 +562,72 @@ func TestDashboardRendersSectionNavigation(t *testing.T) {
 }
 
 func TestInitialModelDefaultsToInstalled(t *testing.T) {
-	m := initialModel(".")
-	if m.viewMode != viewInstalled {
-		t.Fatalf("expected default view to be installed, got %q", m.viewMode)
+	m := tui.InitialModel(".")
+	if m.ViewMode != tui.ViewInstalled {
+		t.Fatalf("expected default view to be installed, got %q", m.ViewMode)
 	}
-	if m.status != "Loading installed skills..." {
-		t.Fatalf("expected installed loading status, got %q", m.status)
+	if m.Status != "Loading installed skills..." {
+		t.Fatalf("expected installed loading status, got %q", m.Status)
 	}
 }
 
 func TestInitialCatalogLoadDoesNotClearInstalledLoading(t *testing.T) {
-	m := initialModel(".")
-	updated, _ := m.Update(skillsLoadedMsg{skills: []Skill{
-		{Source: "agent-rules", Name: "go-project-rules", Category: "go", Description: "Go rules"},
+	m := tui.InitialModel(".")
+	updated, _ := m.Update(tui.SkillsLoadedMsg{Skills: []tui.Skill{
+		{Source: testSourceAgentRules, Name: testSkillGoProjectRules, Category: "go", Description: testDescGoRules},
 	}})
-	m = updated.(model)
-	if !m.loading {
+	m = asModel(t, updated)
+	if !m.Loading {
 		t.Fatalf("expected installed-first screen to keep loading until installed rows load")
 	}
-	if m.status != "Loading installed skills..." {
-		t.Fatalf("expected installed loading status to remain, got %q", m.status)
+	if m.Status != "Loading installed skills..." {
+		t.Fatalf("expected installed loading status to remain, got %q", m.Status)
 	}
 
-	updated, _ = m.Update(installedLoadedMsg{rows: []InstalledSkill{
-		{Target: "codex", Scope: "global", Skill: "go-project-rules", Managed: "yes", Source: "agent-rules", QualifiedSkill: "agent-rules/go-project-rules", Path: "/tmp/skills/go-project-rules"},
+	updated, _ = m.Update(tui.InstalledLoadedMsg{Rows: []tui.InstalledSkill{
+		{
+			Target:         tui.TargetCodex,
+			Scope:          tui.ScopeGlobal,
+			Skill:          testSkillGoProjectRules,
+			Managed:        tui.ManagedYes,
+			Source:         testSourceAgentRules,
+			QualifiedSkill: testQualifiedGoRules,
+			Path:           testGoRulesPath,
+		},
 	}})
-	m = updated.(model)
-	if m.loading {
+	m = asModel(t, updated)
+	if m.Loading {
 		t.Fatalf("expected loading to finish after installed rows load")
 	}
 }
 
 func TestEnterOpensSkillDetails(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.viewMode = viewSkills
-	m.width = 120
-	m.height = 80
-	m.skills = []Skill{
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewSkills
+	m.Width = 120
+	m.Height = 80
+	m.Skills = []tui.Skill{
 		{
-			Source:      "agent-rules",
-			Name:        "go-project-rules",
+			Source:      testSourceAgentRules,
+			Name:        testSkillGoProjectRules,
 			Category:    "go",
 			Triggers:    "go,golang,go.mod",
 			Description: "Global Go project rules for architecture and contracts.",
 		},
 	}
-	m.applyFilter()
+	m.ApplyFilter()
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = updated.(model)
-	if m.viewMode != viewDetails {
-		t.Fatalf("expected details view, got %q", m.viewMode)
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewDetails {
+		t.Fatalf("expected details view, got %q", m.ViewMode)
 	}
 
 	view := stripANSI(m.View())
 	for _, want := range []string{
 		"Skill details",
-		"agent-rules/go-project-rules",
+		testQualifiedGoRules,
 		"Triggers",
 		"Default path",
 	} {
@@ -403,18 +638,32 @@ func TestEnterOpensSkillDetails(t *testing.T) {
 }
 
 func TestParseInstalledTSV(t *testing.T) {
-	input := "target\tscope\tskill\tmanaged\tsource\tqualified_skill\tinstalled_path\tcontent_hash\tinstalled_at\tpath\n" +
-		"claude\tproject\trules-selector\tyes\tagent-rules\tagent-rules/rules-selector\t/tmp/project/.claude/skills/rules-selector\tabc\t2026-05-05T00:00:00Z\t/tmp/project/.claude/skills/rules-selector\n" +
-		"claude\tproject\tmanual-skill\tno\t-\t-\t/tmp/project/.claude/skills/manual-skill\t-\t-\t/tmp/project/.claude/skills/manual-skill\n"
+	input := strings.Join([]string{
+		core.InstalledHeader,
+		strings.Join([]string{
+			tui.TargetClaude, tui.ScopeProject, testSkillRulesSelector, tui.ManagedYes, testSourceAgentRules,
+			testQualifiedRules, "/tmp/project/.claude/skills/rules-selector",
+			testHashABC, testTimestampInstalled, "/tmp/project/.claude/skills/rules-selector",
+		}, "\t"),
+		strings.Join([]string{
+			tui.TargetClaude, tui.ScopeProject, testSkillManual, "no", "-", "-",
+			testManualSkillPath, "-", "-",
+			testManualSkillPath,
+		}, "\t"),
+		"",
+	}, "\n")
 
-	rows, err := parseInstalledTSV(input)
+	rows, err := tui.ParseInstalledTSV(input)
 	if err != nil {
-		t.Fatalf("parseInstalledTSV returned error: %v", err)
+		t.Fatalf("tui.ParseInstalledTSV returned error: %v", err)
 	}
 	if len(rows) != 2 {
 		t.Fatalf("expected 2 installed rows, got %d", len(rows))
 	}
-	if rows[0].Target != "claude" || rows[0].Scope != "project" || rows[0].Managed != "yes" || rows[0].Source != "agent-rules" {
+	if rows[0].Target != tui.TargetClaude ||
+		rows[0].Scope != tui.ScopeProject ||
+		rows[0].Managed != tui.ManagedYes ||
+		rows[0].Source != testSourceAgentRules {
 		t.Fatalf("unexpected managed row: %#v", rows[0])
 	}
 	if rows[1].Managed != "no" {
@@ -423,79 +672,132 @@ func TestParseInstalledTSV(t *testing.T) {
 }
 
 func TestParseInstalledUsageTSV(t *testing.T) {
-	input := "source\tskill\ttarget\tscope\tproject_path\ttarget_root\tinstalled_path\tsource_ref\tsource_location\tcatalog\tcontent_hash\tinstalled_at\tupdated_at\n" +
-		"agent-rules\trules-selector\tcodex\tproject\t/tmp/project\t/tmp/project/.agents/skills\t/tmp/project/.agents/skills/rules-selector\tmain\tgit@example.com:rules.git\tcatalog/skills.tsv\tabc\t2026-05-05T00:00:00Z\t2026-05-05T01:00:00Z\n"
+	input := strings.Join([]string{
+		core.InstalledUsageHeader,
+		strings.Join([]string{
+			testSourceAgentRules, testSkillRulesSelector, tui.TargetCodex, tui.ScopeProject, testProjectPath,
+			testProjectSkillsRoot, testProjectRulesPath,
+			"main", "git@example.com:rules.git", "catalog/skills.tsv", testHashABC,
+			testTimestampInstalled, testTimestampUsage,
+		}, "\t"),
+		"",
+	}, "\n")
 
-	rows, err := parseInstalledUsageTSV(input)
+	rows, err := tui.ParseInstalledUsageTSV(input)
 	if err != nil {
-		t.Fatalf("parseInstalledUsageTSV returned error: %v", err)
+		t.Fatalf("tui.ParseInstalledUsageTSV returned error: %v", err)
 	}
 	if len(rows) != 1 {
 		t.Fatalf("expected 1 usage row, got %d", len(rows))
 	}
 	row := rows[0]
-	if row.Target != "codex" || row.Scope != "project" || row.ProjectPath != "/tmp/project" || !row.RegistryOnly {
+	if row.Target != tui.TargetCodex || row.Scope != tui.ScopeProject || row.ProjectPath != testProjectPath || !row.RegistryOnly {
 		t.Fatalf("unexpected usage row: %#v", row)
 	}
 }
 
 func TestBuildUsageSummariesGroupsRowsBySkill(t *testing.T) {
-	rows := []InstalledSkill{
-		{Source: "agent-rules", Skill: "rules-selector", Managed: "yes", Target: "codex", Scope: "global", ProjectPath: "-", UpdatedAt: "2026-05-05T01:00:00Z"},
-		{Source: "agent-rules", Skill: "rules-selector", Managed: "yes", Target: "codex", Scope: "project", ProjectPath: "/tmp/project-a", UpdatedAt: "2026-05-05T02:00:00Z"},
-		{Source: "agent-rules", Skill: "rules-selector", Managed: "yes", Target: "claude", Scope: "project", ProjectPath: "/tmp/project-b", UpdatedAt: "2026-05-05T03:00:00Z"},
-		{Source: "agent-rules", Skill: "go-project-rules", Managed: "yes", Target: "codex", Scope: "project", ProjectPath: "/tmp/project-a", UpdatedAt: "2026-05-05T00:00:00Z"},
+	rows := []tui.InstalledSkill{
+		{
+			Source: testSourceAgentRules, Skill: testSkillRulesSelector, Managed: tui.ManagedYes,
+			Target: tui.TargetCodex, Scope: tui.ScopeGlobal, ProjectPath: "-", UpdatedAt: testTimestampUsage,
+		},
+		{
+			Source: testSourceAgentRules, Skill: testSkillRulesSelector, Managed: tui.ManagedYes,
+			Target: tui.TargetCodex, Scope: tui.ScopeProject, ProjectPath: testProjectA,
+			UpdatedAt: "2026-05-05T02:00:00Z",
+		},
+		{
+			Source: testSourceAgentRules, Skill: testSkillRulesSelector, Managed: tui.ManagedYes,
+			Target: tui.TargetClaude, Scope: tui.ScopeProject, ProjectPath: testProjectB,
+			UpdatedAt: testTimestampLatest,
+		},
+		{
+			Source: testSourceAgentRules, Skill: testSkillGoProjectRules, Managed: tui.ManagedYes,
+			Target: tui.TargetCodex, Scope: tui.ScopeProject, ProjectPath: testProjectA,
+			UpdatedAt: testTimestampInstalled,
+		},
 	}
 
-	summaries := buildUsageSummaries(rows)
+	summaries := tui.BuildUsageSummaries(rows)
 	if len(summaries) != 2 {
 		t.Fatalf("expected 2 summaries, got %#v", summaries)
 	}
-	var rules UsageSummary
+	var rules tui.UsageSummary
 	for _, summary := range summaries {
-		if summary.Key == "agent-rules/rules-selector" {
+		if summary.Key == testQualifiedRules {
 			rules = summary
 		}
 	}
-	if rules.InstallCount != 3 || rules.ProjectCount != 2 || rules.TargetCount != 3 || rules.LatestUpdated != "2026-05-05T03:00:00Z" {
+	if rules.InstallCount != 3 ||
+		rules.ProjectCount != 2 ||
+		rules.TargetCount != 3 ||
+		rules.LatestUpdated != testTimestampLatest {
 		t.Fatalf("unexpected rules-selector summary: %#v", rules)
 	}
 }
 
 func TestMergeInstalledUsageRowsSkipsScannedDuplicates(t *testing.T) {
-	scanned := []InstalledSkill{
-		{Target: "codex", Scope: "project", Skill: "rules-selector", InstalledPath: "/tmp/project/.agents/skills/rules-selector", Path: "/tmp/project/.agents/skills/rules-selector"},
+	scanned := []tui.InstalledSkill{
+		{
+			Target: tui.TargetCodex, Scope: tui.ScopeProject, Skill: testSkillRulesSelector,
+			InstalledPath: testProjectRulesPath,
+			Path:          testProjectRulesPath,
+		},
 	}
-	usageRows := []InstalledSkill{
-		{Target: "codex", Scope: "project", Skill: "rules-selector", ProjectPath: "/tmp/project", TargetRoot: "/tmp/project/.agents/skills", InstalledPath: "/tmp/project/.agents/skills/rules-selector", Path: "/tmp/project/.agents/skills/rules-selector", RegistryOnly: true},
-		{Target: "claude", Scope: "project", Skill: "rules-selector", InstalledPath: "/tmp/other/.claude/skills/rules-selector", Path: "/tmp/other/.claude/skills/rules-selector", RegistryOnly: true},
+	usageRows := []tui.InstalledSkill{
+		{
+			Target: tui.TargetCodex, Scope: tui.ScopeProject, Skill: testSkillRulesSelector, ProjectPath: testProjectPath,
+			TargetRoot: testProjectSkillsRoot, InstalledPath: testProjectRulesPath,
+			Path: testProjectRulesPath, RegistryOnly: true,
+		},
+		{
+			Target: tui.TargetClaude, Scope: tui.ScopeProject, Skill: testSkillRulesSelector,
+			InstalledPath: "/tmp/other/.claude/skills/rules-selector",
+			Path:          "/tmp/other/.claude/skills/rules-selector",
+			RegistryOnly:  true,
+		},
 	}
 
-	rows := mergeInstalledUsageRows(scanned, usageRows)
+	rows := tui.MergeInstalledUsageRows(scanned, usageRows)
 	if len(rows) != 2 {
 		t.Fatalf("expected scanned duplicate to be skipped, got %#v", rows)
 	}
-	if !rows[0].RegistryOnly || rows[0].ProjectPath != "/tmp/project" || rows[0].TargetRoot != "/tmp/project/.agents/skills" {
+	if !rows[0].RegistryOnly ||
+		rows[0].ProjectPath != testProjectPath ||
+		rows[0].TargetRoot != testProjectSkillsRoot {
 		t.Fatalf("expected scanned duplicate to be enriched from registry, got %#v", rows[0])
 	}
-	if !rows[1].RegistryOnly || rows[1].Target != "claude" {
+	if !rows[1].RegistryOnly || rows[1].Target != tui.TargetClaude {
 		t.Fatalf("expected usage-only claude row, got %#v", rows[1])
 	}
 }
 
 func TestUsageScreenShowsSummaryRows(t *testing.T) {
-	rows := []InstalledSkill{
-		{Source: "agent-rules", Skill: "rules-selector", Managed: "yes", Target: "codex", Scope: "global", ProjectPath: "-", Path: "/tmp/global/rules-selector", UpdatedAt: "2026-05-05T01:00:00Z"},
-		{Source: "agent-rules", Skill: "rules-selector", Managed: "yes", Target: "codex", Scope: "project", ProjectPath: "/tmp/project-a", Path: "/tmp/project-a/.agents/skills/rules-selector", UpdatedAt: "2026-05-05T02:00:00Z"},
-		{Source: "agent-rules", Skill: "rules-selector", Managed: "yes", Target: "claude", Scope: "project", ProjectPath: "/tmp/project-b", Path: "/tmp/project-b/.claude/skills/rules-selector", UpdatedAt: "2026-05-05T03:00:00Z"},
+	rows := []tui.InstalledSkill{
+		{
+			Source: testSourceAgentRules, Skill: testSkillRulesSelector, Managed: tui.ManagedYes,
+			Target: tui.TargetCodex, Scope: tui.ScopeGlobal, ProjectPath: "-", Path: testGlobalRulesPath,
+			UpdatedAt: testTimestampUsage,
+		},
+		{
+			Source: testSourceAgentRules, Skill: testSkillRulesSelector, Managed: tui.ManagedYes,
+			Target: tui.TargetCodex, Scope: tui.ScopeProject, ProjectPath: testProjectA,
+			Path: "/tmp/project-a/.agents/skills/rules-selector", UpdatedAt: "2026-05-05T02:00:00Z",
+		},
+		{
+			Source: testSourceAgentRules, Skill: testSkillRulesSelector, Managed: tui.ManagedYes,
+			Target: tui.TargetClaude, Scope: tui.ScopeProject, ProjectPath: testProjectB,
+			Path: "/tmp/project-b/.claude/skills/rules-selector", UpdatedAt: testTimestampLatest,
+		},
 	}
-	m := initialModel(".")
-	m.loading = false
-	m.width = 120
-	m.height = 40
-	m.viewMode = viewUsage
-	m.usageRows = rows
-	m.usageSummaries = buildUsageSummaries(rows)
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.Width = 120
+	m.Height = 40
+	m.ViewMode = tui.ViewUsage
+	m.UsageRows = rows
+	m.UsageSummaries = tui.BuildUsageSummaries(rows)
 
 	view := stripANSI(m.View())
 	for _, want := range []string{
@@ -503,7 +805,7 @@ func TestUsageScreenShowsSummaryRows(t *testing.T) {
 		"Installs: 3",
 		"Skills: 1",
 		"Projects: 2",
-		"agent-rules/rules-selector",
+		testQualifiedRules,
 		"installs: 3",
 		"projects: 2",
 		"targets: 3",
@@ -516,31 +818,40 @@ func TestUsageScreenShowsSummaryRows(t *testing.T) {
 }
 
 func TestEnterOpensUsageDetails(t *testing.T) {
-	rows := []InstalledSkill{
-		{Source: "agent-rules", Skill: "rules-selector", Managed: "yes", Target: "codex", Scope: "global", ProjectPath: "-", Path: "/tmp/global/rules-selector", ContentHash: "global-hash", UpdatedAt: "2026-05-05T01:00:00Z"},
-		{Source: "agent-rules", Skill: "rules-selector", Managed: "yes", Target: "gemini", Scope: "project", ProjectPath: "/tmp/project-b", Path: "/tmp/project-b/.gemini/skills/rules-selector", ContentHash: "project-hash", UpdatedAt: "2026-05-05T03:00:00Z"},
+	rows := []tui.InstalledSkill{
+		{
+			Source: testSourceAgentRules, Skill: testSkillRulesSelector, Managed: tui.ManagedYes,
+			Target: tui.TargetCodex, Scope: tui.ScopeGlobal, ProjectPath: "-", Path: testGlobalRulesPath,
+			ContentHash: "global-hash", UpdatedAt: testTimestampUsage,
+		},
+		{
+			Source: testSourceAgentRules, Skill: testSkillRulesSelector, Managed: tui.ManagedYes,
+			Target: tui.TargetGemini, Scope: tui.ScopeProject, ProjectPath: testProjectB,
+			Path: testProjectBGeminiPath, ContentHash: "project-hash",
+			UpdatedAt: testTimestampLatest,
+		},
 	}
-	m := initialModel(".")
-	m.loading = false
-	m.width = 120
-	m.height = 40
-	m.viewMode = viewUsage
-	m.usageRows = rows
-	m.usageSummaries = buildUsageSummaries(rows)
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.Width = 120
+	m.Height = 40
+	m.ViewMode = tui.ViewUsage
+	m.UsageRows = rows
+	m.UsageSummaries = tui.BuildUsageSummaries(rows)
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = updated.(model)
-	if m.viewMode != viewUsageDetails {
-		t.Fatalf("expected usage details view, got %q", m.viewMode)
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewUsageDetails {
+		t.Fatalf("expected usage details view, got %q", m.ViewMode)
 	}
 
 	view := stripANSI(m.View())
 	for _, want := range []string{
 		"Usage details",
-		"agent-rules/rules-selector",
+		testQualifiedRules,
 		"Installed in: 2",
 		"Projects: 1",
-		"Codex global",
+		testLabelCodexGlobal,
 		"LOCAL PROJECT",
 		"Gemini project",
 		"Project root: /tmp/project-b",
@@ -553,126 +864,157 @@ func TestEnterOpensUsageDetails(t *testing.T) {
 }
 
 func TestUsageUpdateArgsAndGlobalOnlyRefusal(t *testing.T) {
-	if got := usageUpdateArgsForKey("agent-rules/rules-selector"); strings.Join(got, " ") != "usage update --projects agent-rules/rules-selector" {
+	want := "usage update --projects agent-rules/rules-selector"
+	if got := tui.UsageUpdateArgsForKey(testQualifiedRules); strings.Join(got, " ") != want {
 		t.Fatalf("unexpected usage update args: %#v", got)
 	}
 
-	m := initialModel(".")
-	m.loading = false
-	m.viewMode = viewUsage
-	m.usageRows = []InstalledSkill{
-		{Source: "agent-rules", Skill: "rules-selector", Managed: "yes", Target: "codex", Scope: "global", ProjectPath: "-", Path: "/tmp/global/rules-selector"},
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewUsage
+	m.UsageRows = []tui.InstalledSkill{
+		testManagedUsage(testSourceAgentRules, testSkillRulesSelector, tui.TargetCodex, tui.ScopeGlobal, "-", testGlobalRulesPath),
 	}
-	m.usageSummaries = buildUsageSummaries(m.usageRows)
+	m.UsageSummaries = tui.BuildUsageSummaries(m.UsageRows)
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
-	m = updated.(model)
-	if cmd != nil || m.busy {
+	m = asModel(t, updated)
+	if cmd != nil || m.Busy {
 		t.Fatalf("global-only usage update should not start a command")
 	}
-	if !strings.Contains(m.status, "has no recorded project installs") {
-		t.Fatalf("expected global-only refusal status, got %q", m.status)
+	if !strings.Contains(m.Status, "has no recorded project installs") {
+		t.Fatalf("expected global-only refusal status, got %q", m.Status)
 	}
 }
 
 func TestUsageDetailsUpdateReturnsToDetailsAfterReload(t *testing.T) {
-	rows := []InstalledSkill{
-		{Source: "agent-rules", Skill: "rules-selector", Managed: "yes", Target: "codex", Scope: "global", ProjectPath: "-", Path: "/tmp/global/rules-selector", UpdatedAt: "2026-05-05T01:00:00Z"},
-		{Source: "agent-rules", Skill: "rules-selector", Managed: "yes", Target: "codex", Scope: "project", ProjectPath: "/tmp/project-a", Path: "/tmp/project-a/.agents/skills/rules-selector", UpdatedAt: "2026-05-05T02:00:00Z"},
+	rows := []tui.InstalledSkill{
+		testManagedUsage(testSourceAgentRules, testSkillRulesSelector, tui.TargetCodex, tui.ScopeGlobal, "-", testGlobalRulesPath),
+		testManagedUsage(
+			testSourceAgentRules, testSkillRulesSelector, tui.TargetCodex, tui.ScopeProject,
+			testProjectA, "/tmp/project-a/.agents/skills/rules-selector",
+		),
 	}
-	m := initialModel(".")
-	m.loading = false
-	m.width = 120
-	m.height = 40
-	m.viewMode = viewUsage
-	m.usageRows = rows
-	m.usageSummaries = buildUsageSummaries(rows)
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.Width = 120
+	m.Height = 40
+	m.ViewMode = tui.ViewUsage
+	m.UsageRows = rows
+	m.UsageSummaries = tui.BuildUsageSummaries(rows)
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = updated.(model)
+	m = asModel(t, updated)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
-	m = updated.(model)
+	m = asModel(t, updated)
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
-	m = updated.(model)
-	if cmd == nil || !m.busy || !m.returnToUsageDetails {
+	m = asModel(t, updated)
+	if cmd == nil || !m.Busy || !m.ReturnToUsageDetails {
 		t.Fatalf("expected usage details update command and detail-return marker")
 	}
 
-	updated, _ = m.Update(commandDoneMsg{action: "Update usage", output: "Updated project usage: updated=0 unchanged=1 skipped=0 failed=0\n"})
-	m = updated.(model)
-	if !m.loading || m.viewMode != viewUsageDetails {
-		t.Fatalf("expected usage details to remain active during reload, got view=%q loading=%v", m.viewMode, m.loading)
+	updated, _ = m.Update(tui.CommandDoneMsg{
+		Action: "Update usage",
+		Output: "Updated project usage: updated=0 unchanged=1 skipped=0 failed=0\n",
+	})
+	m = asModel(t, updated)
+	if !m.Loading || m.ViewMode != tui.ViewUsageDetails {
+		t.Fatalf("expected usage details to remain active during reload, got view=%q loading=%v", m.ViewMode, m.Loading)
 	}
 
-	updated, _ = m.Update(usageLoadedMsg{rows: rows})
-	m = updated.(model)
-	if m.viewMode != viewUsageDetails {
-		t.Fatalf("expected usage details after reload, got %q", m.viewMode)
+	updated, _ = m.Update(tui.UsageLoadedMsg{Rows: rows})
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewUsageDetails {
+		t.Fatalf("expected usage details after reload, got %q", m.ViewMode)
 	}
-	if !strings.Contains(m.status, "Updated project usage: updated=0 unchanged=1 skipped=0 failed=0") {
-		t.Fatalf("expected usage update summary to remain visible, got %q", m.status)
+	if !strings.Contains(m.Status, "Updated project usage: updated=0 unchanged=1 skipped=0 failed=0") {
+		t.Fatalf("expected usage update summary to remain visible, got %q", m.Status)
 	}
 }
 
 func TestUsageFilterMatchesSkillSourceTargetProjectAndPath(t *testing.T) {
-	rows := []InstalledSkill{
-		{Source: "agent-rules", Skill: "go-project-rules", Managed: "yes", Target: "codex", Scope: "project", ProjectPath: "/tmp/project-a", Path: "/tmp/project-a/.agents/skills/go-project-rules"},
-		{Source: "agent-rules", Skill: "docs-project-rules", Managed: "yes", Target: "claude", Scope: "project", ProjectPath: "/tmp/project-b", Path: "/tmp/project-b/.claude/skills/docs-project-rules"},
-		{Source: "custom", Skill: "workflow-rules", Managed: "yes", Target: "directory", Scope: "custom", ProjectPath: "-", Path: "/tmp/custom/workflow-rules"},
+	rows := []tui.InstalledSkill{
+		testManagedUsage(
+			testSourceAgentRules, testSkillGoProjectRules, tui.TargetCodex, tui.ScopeProject,
+			testProjectA, "/tmp/project-a/.agents/skills/go-project-rules",
+		),
+		testManagedUsage(
+			testSourceAgentRules, testSkillDocsProject, tui.TargetClaude, tui.ScopeProject,
+			testProjectB, "/tmp/project-b/.claude/skills/docs-project-rules",
+		),
+		testManagedUsage(tui.ScopeCustom, "workflow-rules", tui.TargetDirectory, tui.ScopeCustom, "-", "/tmp/custom/workflow-rules"),
 	}
-	m := initialModel(".")
-	m.loading = false
-	m.viewMode = viewUsage
-	m.usageRows = rows
-	m.applyUsageFilter()
-	if len(m.usageSummaries) != 3 {
-		t.Fatalf("expected all usage summaries without filter, got %#v", m.usageSummaries)
-	}
-
-	m.usageFilter = "claude"
-	m.applyUsageFilter()
-	if len(m.usageSummaries) != 1 || m.usageSummaries[0].Key != "agent-rules/docs-project-rules" {
-		t.Fatalf("expected claude filter to keep docs project rules, got %#v", m.usageSummaries)
-	}
-
-	m.usageFilter = "project-a"
-	m.applyUsageFilter()
-	if len(m.usageSummaries) != 1 || m.usageSummaries[0].Key != "agent-rules/go-project-rules" {
-		t.Fatalf("expected project path filter to keep go project rules, got %#v", m.usageSummaries)
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewUsage
+	m.UsageRows = rows
+	m.ApplyUsageFilter()
+	if len(m.UsageSummaries) != 3 {
+		t.Fatalf("expected all usage summaries without filter, got %#v", m.UsageSummaries)
 	}
 
-	m.usageFilter = "custom/workflow"
-	m.applyUsageFilter()
-	if len(m.usageSummaries) != 1 || m.usageSummaries[0].Key != "custom/workflow-rules" {
-		t.Fatalf("expected source/skill filter to keep workflow rules, got %#v", m.usageSummaries)
+	m.UsageFilter = tui.TargetClaude
+	m.ApplyUsageFilter()
+	if len(m.UsageSummaries) != 1 || m.UsageSummaries[0].Key != "agent-rules/docs-project-rules" {
+		t.Fatalf("expected claude filter to keep docs project rules, got %#v", m.UsageSummaries)
+	}
+
+	m.UsageFilter = "project-a"
+	m.ApplyUsageFilter()
+	if len(m.UsageSummaries) != 1 || m.UsageSummaries[0].Key != testQualifiedGoRules {
+		t.Fatalf("expected project path filter to keep go project rules, got %#v", m.UsageSummaries)
+	}
+
+	m.UsageFilter = "custom/workflow"
+	m.ApplyUsageFilter()
+	if len(m.UsageSummaries) != 1 || m.UsageSummaries[0].Key != "custom/workflow-rules" {
+		t.Fatalf("expected source/skill filter to keep workflow rules, got %#v", m.UsageSummaries)
 	}
 }
 
 func TestUsageDetailsUpdateUsesHighlightedProjectLocation(t *testing.T) {
-	row := InstalledSkill{
-		Source:      "agent-rules",
-		Skill:       "go-project-rules",
-		Managed:     "yes",
-		Target:      "claude",
-		Scope:       "project",
-		ProjectPath: "/tmp/project-b",
+	row := tui.InstalledSkill{
+		Source:      testSourceAgentRules,
+		Skill:       testSkillGoProjectRules,
+		Managed:     tui.ManagedYes,
+		Target:      tui.TargetClaude,
+		Scope:       tui.ScopeProject,
+		ProjectPath: testProjectB,
 		Path:        "/tmp/project-b/.claude/skills/go-project-rules",
 	}
-	want := []string{"usage", "update", "--projects", "--target", "claude", "--project", "/tmp/project-b", "agent-rules/go-project-rules"}
-	if got := usageUpdateArgsForLocation(row); strings.Join(got, " ") != strings.Join(want, " ") {
+	want := []string{
+		testCommandUsage, commandUpdate, "--projects", testFlagTarget, tui.TargetClaude,
+		tui.FlagProject, testProjectB, testQualifiedGoRules,
+	}
+	if got := tui.UsageUpdateArgsForLocation(row); strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("expected targeted usage update args %#v, got %#v", want, got)
 	}
 }
 
 func TestUsageBulkUpdateArgsGroupsVisibleProjectRows(t *testing.T) {
-	rows := []InstalledSkill{
-		{Source: "agent-rules", Skill: "go-project-rules", Managed: "yes", Target: "claude", Scope: "project", ProjectPath: "/tmp/project-a"},
-		{Source: "agent-rules", Skill: "docs-project-rules", Managed: "yes", Target: "claude", Scope: "project", ProjectPath: "/tmp/project-a"},
-		{Source: "agent-rules", Skill: "go-project-rules", Managed: "yes", Target: "claude", Scope: "project", ProjectPath: "/tmp/project-a"},
-		{Source: "agent-rules", Skill: "go-project-rules", Managed: "yes", Target: "codex", Scope: "project", ProjectPath: "/tmp/project-b"},
-		{Source: "agent-rules", Skill: "go-project-rules", Managed: "yes", Target: "codex", Scope: "global", ProjectPath: "-"},
+	rows := []tui.InstalledSkill{
+		{
+			Source: testSourceAgentRules, Skill: testSkillGoProjectRules, Managed: tui.ManagedYes,
+			Target: tui.TargetClaude, Scope: tui.ScopeProject, ProjectPath: testProjectA,
+		},
+		{
+			Source: testSourceAgentRules, Skill: testSkillDocsProject, Managed: tui.ManagedYes,
+			Target: tui.TargetClaude, Scope: tui.ScopeProject, ProjectPath: testProjectA,
+		},
+		{
+			Source: testSourceAgentRules, Skill: testSkillGoProjectRules, Managed: tui.ManagedYes,
+			Target: tui.TargetClaude, Scope: tui.ScopeProject, ProjectPath: testProjectA,
+		},
+		{
+			Source: testSourceAgentRules, Skill: testSkillGoProjectRules, Managed: tui.ManagedYes,
+			Target: tui.TargetCodex, Scope: tui.ScopeProject, ProjectPath: testProjectB,
+		},
+		{
+			Source: testSourceAgentRules, Skill: testSkillGoProjectRules, Managed: tui.ManagedYes,
+			Target: tui.TargetCodex, Scope: tui.ScopeGlobal, ProjectPath: "-",
+		},
 	}
-	groups := usageBulkUpdateArgGroups(rows)
+	groups := tui.UsageBulkUpdateArgGroups(rows)
 	got := make([]string, 0, len(groups))
 	for _, group := range groups {
 		got = append(got, strings.Join(group, " "))
@@ -687,16 +1029,26 @@ func TestUsageBulkUpdateArgsGroupsVisibleProjectRows(t *testing.T) {
 }
 
 func TestInstalledScreenGroupsRowsByTargetScope(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.width = 120
-	m.height = 40
-	m.viewMode = viewInstalled
-	m.installedRows = []InstalledSkill{
-		{Target: "codex", Scope: "global", Skill: "rules-selector", Managed: "yes", Source: "agent-rules", Path: "/tmp/codex/rules-selector"},
-		{Target: "claude", Scope: "project", Skill: "manual-skill", Managed: "no", Source: "-", ProjectPath: "/tmp/project", Path: "/tmp/project/.claude/skills/manual-skill"},
-		{Target: "gemini", Scope: "project", Skill: "rules-selector", Managed: "yes", Source: "agent-rules", ProjectPath: "/tmp/other-project", Path: "/tmp/other-project/.gemini/skills/rules-selector", RegistryOnly: true},
-		{Target: "directory", Scope: "custom", Skill: "docs-project-rules", Managed: "yes", Source: "agent-rules", TargetRoot: "/tmp/skills", Path: "/tmp/skills/docs-project-rules"},
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.Width = 120
+	m.Height = 40
+	m.ViewMode = tui.ViewInstalled
+	m.InstalledRows = []tui.InstalledSkill{
+		testManagedInstalled("/tmp/codex/rules-selector"),
+		{
+			Target: tui.TargetClaude, Scope: tui.ScopeProject, Skill: testSkillManual, Managed: "no",
+			Source: "-", ProjectPath: testProjectPath, Path: testManualSkillPath,
+		},
+		{
+			Target: tui.TargetGemini, Scope: tui.ScopeProject, Skill: testSkillRulesSelector, Managed: tui.ManagedYes,
+			Source: testSourceAgentRules, ProjectPath: "/tmp/other-project",
+			Path: "/tmp/other-project/.gemini/skills/rules-selector", RegistryOnly: true,
+		},
+		{
+			Target: tui.TargetDirectory, Scope: tui.ScopeCustom, Skill: testSkillDocsProject, Managed: tui.ManagedYes,
+			Source: testSourceAgentRules, TargetRoot: testSkillsRoot, Path: "/tmp/skills/docs-project-rules",
+		},
 	}
 
 	view := stripANSI(m.View())
@@ -719,7 +1071,7 @@ func TestInstalledScreenGroupsRowsByTargetScope(t *testing.T) {
 		"Project /tmp/other-project",
 		"registry",
 		"Custom directories",
-		"/tmp/skills",
+		testSkillsRoot,
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected installed screen to contain %q, got:\n%s", want, view)
@@ -728,20 +1080,14 @@ func TestInstalledScreenGroupsRowsByTargetScope(t *testing.T) {
 }
 
 func TestInstalledScreenCanScrollToLastProjectSkill(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.width = 130
-	m.height = 28
-	m.viewMode = viewInstalled
-	m.installedRows = []InstalledSkill{
-		{Target: "gemini", Scope: "global", Skill: "productivity_caveman", Managed: "yes", Source: "mattpocock", Path: "/tmp/gemini/productivity_caveman"},
-		{Target: "codex", Scope: "project", Skill: "acton", QualifiedSkill: "acton/acton", Managed: "yes", Source: "acton", ProjectPath: "/tmp/tongoldy", Path: "/tmp/tongoldy/.agents/skills/acton"},
-		{Target: "codex", Scope: "project", Skill: "func2tolk", QualifiedSkill: "acton/func2tolk", Managed: "yes", Source: "acton", ProjectPath: "/tmp/tongoldy", Path: "/tmp/tongoldy/.agents/skills/func2tolk"},
-		{Target: "codex", Scope: "project", Skill: "tolk", QualifiedSkill: "acton/tolk", Managed: "yes", Source: "acton", ProjectPath: "/tmp/tongoldy", Path: "/tmp/tongoldy/.agents/skills/tolk"},
-		{Target: "codex", Scope: "project", Skill: "ton-blockchain", QualifiedSkill: "acton/ton-blockchain", Managed: "yes", Source: "acton", ProjectPath: "/tmp/tongoldy", Path: "/tmp/tongoldy/.agents/skills/ton-blockchain"},
-	}
-	sortInstalledRows(m.installedRows)
-	m.ensureInstalledCursorVisible()
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.Width = 130
+	m.Height = 28
+	m.ViewMode = tui.ViewInstalled
+	m.InstalledRows = actonInstalledRows()
+	tui.SortInstalledRows(m.InstalledRows)
+	m.EnsureInstalledCursorVisible()
 
 	view := stripANSI(m.View())
 	if !strings.Contains(view, "Showing ") {
@@ -750,7 +1096,7 @@ func TestInstalledScreenCanScrollToLastProjectSkill(t *testing.T) {
 
 	for i := 0; i < 4; i++ {
 		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
-		m = updated.(model)
+		m = asModel(t, updated)
 	}
 	view = stripANSI(m.View())
 	if !strings.Contains(view, "ton-blockchain") {
@@ -762,64 +1108,75 @@ func TestInstalledScreenCanScrollToLastProjectSkill(t *testing.T) {
 }
 
 func TestInstallReloadFocusesNewProjectRows(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.viewMode = viewInstallResult
-	m.width = 130
-	m.height = 40
-	m.installResult = InstallResult{
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewInstallResult
+	m.Width = 130
+	m.Height = 40
+	m.InstallResult = tui.InstallResult{
 		SkillNames: []string{"acton/acton", "acton/func2tolk", "acton/tolk", "acton/ton-blockchain"},
-		Targets: []InstallTargetResult{
-			{Target: "codex", Scope: "project", Label: "Codex project", Root: "/tmp/tongoldy/.agents/skills"},
+		Targets: []tui.InstallTargetResult{
+			{Target: tui.TargetCodex, Scope: tui.ScopeProject, Label: "Codex project", Root: "/tmp/tongoldy/.agents/skills"},
 		},
 	}
 
-	updated, _ := m.Update(installedLoadedMsg{rows: []InstalledSkill{
-		{Target: "gemini", Scope: "global", Skill: "productivity_caveman", Managed: "yes", Source: "mattpocock", Path: "/tmp/gemini/productivity_caveman"},
-		{Target: "codex", Scope: "project", Skill: "acton", QualifiedSkill: "acton/acton", Managed: "yes", Source: "acton", ProjectPath: "/tmp/tongoldy", Path: "/tmp/tongoldy/.agents/skills/acton"},
-		{Target: "codex", Scope: "project", Skill: "func2tolk", QualifiedSkill: "acton/func2tolk", Managed: "yes", Source: "acton", ProjectPath: "/tmp/tongoldy", Path: "/tmp/tongoldy/.agents/skills/func2tolk"},
-		{Target: "codex", Scope: "project", Skill: "tolk", QualifiedSkill: "acton/tolk", Managed: "yes", Source: "acton", ProjectPath: "/tmp/tongoldy", Path: "/tmp/tongoldy/.agents/skills/tolk"},
-		{Target: "codex", Scope: "project", Skill: "ton-blockchain", QualifiedSkill: "acton/ton-blockchain", Managed: "yes", Source: "acton", ProjectPath: "/tmp/tongoldy", Path: "/tmp/tongoldy/.agents/skills/ton-blockchain"},
+	updated, _ := m.Update(tui.InstalledLoadedMsg{Rows: []tui.InstalledSkill{
+		actonInstalledRows()[0],
+		actonInstalledRows()[1],
+		actonInstalledRows()[2],
+		actonInstalledRows()[3],
+		actonInstalledRows()[4],
 	}})
-	m = updated.(model)
-	if m.installedCursor != 1 || m.installedOffset != 1 {
-		t.Fatalf("expected installed reload to focus first newly installed project row, cursor=%d offset=%d", m.installedCursor, m.installedOffset)
+	m = asModel(t, updated)
+	if m.InstalledCursor != 1 || m.InstalledOffset != 1 {
+		t.Fatalf(
+			"expected installed reload to focus first newly installed project row, cursor=%d offset=%d",
+			m.InstalledCursor,
+			m.InstalledOffset,
+		)
 	}
 
-	m.viewMode = viewInstalled
+	m.ViewMode = tui.ViewInstalled
 	view := stripANSI(m.View())
 	if strings.Contains(view, "productivity_caveman") {
 		t.Fatalf("expected installed view to focus project install group instead of unrelated global row, got:\n%s", view)
 	}
-	if !strings.Contains(view, "acton") || !strings.Contains(view, "func2tolk") {
+	if !strings.Contains(view, testSourceActon) || !strings.Contains(view, "func2tolk") {
 		t.Fatalf("expected installed view to show new project install group, got:\n%s", view)
 	}
 }
 
 func TestEnterOpensInstalledSkillDetails(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.width = 120
-	m.height = 40
-	m.viewMode = viewInstalled
-	m.installedRows = []InstalledSkill{
-		{Target: "codex", Scope: "global", Skill: "rules-selector", Managed: "yes", Source: "agent-rules", Path: "/tmp/codex/rules-selector"},
-		{Target: "gemini", Scope: "project", Skill: "rules-selector", Managed: "yes", Source: "agent-rules", ProjectPath: "/tmp/project-b", Path: "/tmp/project-b/.gemini/skills/rules-selector", RegistryOnly: true, ContentHash: "abc", UpdatedAt: "2026-05-05T01:00:00Z"},
-		{Target: "claude", Scope: "project", Skill: "manual-skill", Managed: "no", Source: "-", ProjectPath: "/tmp/project-a", Path: "/tmp/project-a/.claude/skills/manual-skill"},
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.Width = 120
+	m.Height = 40
+	m.ViewMode = tui.ViewInstalled
+	m.InstalledRows = []tui.InstalledSkill{
+		testManagedInstalled("/tmp/codex/rules-selector"),
+		{
+			Target: tui.TargetGemini, Scope: tui.ScopeProject, Skill: testSkillRulesSelector, Managed: tui.ManagedYes,
+			Source: testSourceAgentRules, ProjectPath: testProjectB, Path: testProjectBGeminiPath,
+			RegistryOnly: true, ContentHash: testHashABC, UpdatedAt: testTimestampUsage,
+		},
+		{
+			Target: tui.TargetClaude, Scope: tui.ScopeProject, Skill: testSkillManual, Managed: "no",
+			Source: "-", ProjectPath: testProjectA, Path: "/tmp/project-a/.claude/skills/manual-skill",
+		},
 	}
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = updated.(model)
-	if m.viewMode != viewInstalledDetails {
-		t.Fatalf("expected installed details view, got %q", m.viewMode)
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewInstalledDetails {
+		t.Fatalf("expected installed details view, got %q", m.ViewMode)
 	}
 
 	view := stripANSI(m.View())
 	for _, want := range []string{
 		"Installed skill details",
-		"agent-rules/rules-selector",
+		testQualifiedRules,
 		"Installed in: 2",
-		"Codex global",
+		testLabelCodexGlobal,
 		"LOCAL PROJECT",
 		"Gemini project",
 		"Project root: /tmp/project-b",
@@ -834,92 +1191,113 @@ func TestEnterOpensInstalledSkillDetails(t *testing.T) {
 }
 
 func TestInstalledDetailsActionsUseHighlightedLocation(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.width = 120
-	m.height = 40
-	m.viewMode = viewInstalled
-	m.installedRows = []InstalledSkill{
-		{Target: "codex", Scope: "global", Skill: "rules-selector", Managed: "yes", Source: "agent-rules", Path: "/tmp/codex/rules-selector"},
-		{Target: "gemini", Scope: "project", Skill: "rules-selector", Managed: "yes", Source: "agent-rules", ProjectPath: "/tmp/project-b", Path: "/tmp/project-b/.gemini/skills/rules-selector", RegistryOnly: true},
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.Width = 120
+	m.Height = 40
+	m.ViewMode = tui.ViewInstalled
+	m.InstalledRows = []tui.InstalledSkill{
+		testManagedInstalled("/tmp/codex/rules-selector"),
+		{
+			Target: tui.TargetGemini, Scope: tui.ScopeProject, Skill: testSkillRulesSelector, Managed: tui.ManagedYes,
+			Source: testSourceAgentRules, ProjectPath: testProjectB,
+			Path: testProjectBGeminiPath, RegistryOnly: true,
+		},
 	}
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = updated.(model)
+	m = asModel(t, updated)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
-	m = updated.(model)
+	m = asModel(t, updated)
 
-	row, ok := m.currentInstalledDetail()
+	row, ok := m.CurrentInstalledDetail()
 	if !ok {
 		t.Fatalf("expected highlighted installed details row")
 	}
-	want := []string{"update", "--target", "gemini", "--scope", "project", "--project", "/tmp/project-b"}
-	if got := installedUpdateArgsForRow(row, "/tmp/fallback"); strings.Join(got, " ") != strings.Join(want, " ") {
+	want := []string{commandUpdate, testFlagTarget, tui.TargetGemini, tui.FlagScope, tui.ScopeProject, tui.FlagProject, testProjectB}
+	if got := tui.InstalledUpdateArgsForRow(row, "/tmp/fallback"); strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("expected details update args %#v, got %#v", want, got)
 	}
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
-	m = updated.(model)
-	if m.viewMode != viewConfirmDelete {
-		t.Fatalf("expected confirm delete, got %q", m.viewMode)
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewConfirmDelete {
+		t.Fatalf("expected confirm delete, got %q", m.ViewMode)
 	}
-	if m.pendingUninstall.ProjectPath != "/tmp/project-b" {
-		t.Fatalf("expected pending uninstall to use highlighted details row, got %#v", m.pendingUninstall)
+	if m.PendingUninstall.ProjectPath != testProjectB {
+		t.Fatalf("expected pending uninstall to use highlighted details row, got %#v", m.PendingUninstall)
 	}
 }
 
 func TestEscReturnsFromInstalledDetails(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.viewMode = viewInstalledDetails
-	m.installedDetailKey = "agent-rules/rules-selector"
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewInstalledDetails
+	m.InstalledDetailKey = testQualifiedRules
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	m = updated.(model)
-	if m.viewMode != viewInstalled {
-		t.Fatalf("expected installed view after esc, got %q", m.viewMode)
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewInstalled {
+		t.Fatalf("expected installed view after esc, got %q", m.ViewMode)
 	}
 }
 
 func TestInstalledUpdateAndUninstallArgs(t *testing.T) {
-	row := InstalledSkill{Target: "claude", Scope: "project", Skill: "rules-selector"}
-	project := "/tmp/project"
+	row := tui.InstalledSkill{Target: tui.TargetClaude, Scope: tui.ScopeProject, Skill: testSkillRulesSelector}
+	project := testProjectPath
 
-	updateWant := []string{"update", "--target", "claude", "--scope", "project", "--project", project}
-	if got := installedUpdateArgsForRow(row, project); strings.Join(got, " ") != strings.Join(updateWant, " ") {
+	updateWant := []string{
+		commandUpdate, testFlagTarget, tui.TargetClaude,
+		tui.FlagScope, tui.ScopeProject, tui.FlagProject, project,
+	}
+	if got := tui.InstalledUpdateArgsForRow(row, project); strings.Join(got, " ") != strings.Join(updateWant, " ") {
 		t.Fatalf("expected update args %#v, got %#v", updateWant, got)
 	}
 
-	uninstallWant := []string{"uninstall", "rules-selector", "--target", "claude", "--scope", "project", "--project", project}
-	if got := installedUninstallArgsForRow(row, project); strings.Join(got, " ") != strings.Join(uninstallWant, " ") {
+	uninstallWant := []string{
+		"uninstall", testSkillRulesSelector, testFlagTarget, tui.TargetClaude,
+		tui.FlagScope, tui.ScopeProject, tui.FlagProject, project,
+	}
+	if got := tui.InstalledUninstallArgsForRow(row, project); strings.Join(got, " ") != strings.Join(uninstallWant, " ") {
 		t.Fatalf("expected uninstall args %#v, got %#v", uninstallWant, got)
 	}
 
-	registryRow := InstalledSkill{Target: "gemini", Scope: "project", Skill: "rules-selector", ProjectPath: "/tmp/recorded-project"}
-	registryWant := []string{"update", "--target", "gemini", "--scope", "project", "--project", "/tmp/recorded-project"}
-	if got := installedUpdateArgsForRow(registryRow, project); strings.Join(got, " ") != strings.Join(registryWant, " ") {
+	registryRow := tui.InstalledSkill{
+		Target: tui.TargetGemini, Scope: tui.ScopeProject, Skill: testSkillRulesSelector,
+		ProjectPath: testRecordedProject,
+	}
+	registryWant := []string{
+		commandUpdate, testFlagTarget, tui.TargetGemini,
+		tui.FlagScope, tui.ScopeProject, tui.FlagProject, testRecordedProject,
+	}
+	if got := tui.InstalledUpdateArgsForRow(registryRow, project); strings.Join(got, " ") != strings.Join(registryWant, " ") {
 		t.Fatalf("expected registry update args %#v, got %#v", registryWant, got)
 	}
 
-	directoryRow := InstalledSkill{Target: "directory", Scope: "custom", Skill: "rules-selector", TargetRoot: "/tmp/skills"}
-	directoryWant := []string{"uninstall", "rules-selector", "--target", "directory", "--dir", "/tmp/skills"}
-	if got := installedUninstallArgsForRow(directoryRow, project); strings.Join(got, " ") != strings.Join(directoryWant, " ") {
+	directoryRow := tui.InstalledSkill{
+		Target: tui.TargetDirectory, Scope: tui.ScopeCustom,
+		Skill: testSkillRulesSelector, TargetRoot: testSkillsRoot,
+	}
+	directoryWant := []string{"uninstall", testSkillRulesSelector, testFlagTarget, tui.TargetDirectory, tui.FlagDir, testSkillsRoot}
+	if got := tui.InstalledUninstallArgsForRow(directoryRow, project); strings.Join(got, " ") != strings.Join(directoryWant, " ") {
 		t.Fatalf("expected directory uninstall args %#v, got %#v", directoryWant, got)
 	}
 }
 
-func TestInstalledArgsUseLegacyCodexEnv(t *testing.T) {
+func TestInstalledArgsWithLegacyEnv(t *testing.T) {
 	t.Setenv("AGENT_SKILLS_DIR", "/tmp/legacy-skills")
-	row := InstalledSkill{Target: "codex", Scope: "global", Skill: "rules-selector", Path: "/tmp/legacy-skills/rules-selector"}
+	row := tui.InstalledSkill{
+		Target: tui.TargetCodex, Scope: tui.ScopeGlobal,
+		Skill: testSkillRulesSelector, Path: testLegacyRulesPath,
+	}
 
-	if got := installedListArgs("codex", "global", "/tmp/project"); strings.Join(got, " ") != "list --tsv" {
-		t.Fatalf("expected legacy list args, got %#v", got)
+	updateWant := "update --target codex --scope global"
+	if got := tui.InstalledUpdateArgsForRow(row, testProjectPath); strings.Join(got, " ") != updateWant {
+		t.Fatalf("expected explicit update args %q, got %q", updateWant, strings.Join(got, " "))
 	}
-	if got := installedUpdateArgsForRow(row, "/tmp/project"); strings.Join(got, " ") != "update" {
-		t.Fatalf("expected legacy update args, got %#v", got)
-	}
-	if got := installedUninstallArgsForRow(row, "/tmp/project"); strings.Join(got, " ") != "uninstall rules-selector" {
-		t.Fatalf("expected legacy uninstall args, got %#v", got)
+	uninstallWant := "uninstall rules-selector --target codex --scope global"
+	if got := tui.InstalledUninstallArgsForRow(row, "/tmp/project"); strings.Join(got, " ") != uninstallWant {
+		t.Fatalf("expected explicit uninstall args %q, got %q", uninstallWant, strings.Join(got, " "))
 	}
 }
 
@@ -927,21 +1305,21 @@ func TestParseActiveSourcesTSV(t *testing.T) {
 	input := "name\ttype\tlocation\tref\tcatalog\n" +
 		"agent-rules\tgit\tgit@github.com:assurrussa/agent-rules.git\tmain\tcatalog/skills.tsv\n"
 
-	sources, err := parseSourcesTSV(input)
+	sources, err := tui.ParseSourcesTSV(input)
 	if err != nil {
-		t.Fatalf("parseSourcesTSV returned error: %v", err)
+		t.Fatalf("tui.ParseSourcesTSV returned error: %v", err)
 	}
-	if len(sources) != 1 || sources[0].Name != "agent-rules" || sources[0].Catalog != "catalog/skills.tsv" {
+	if len(sources) != 1 || sources[0].Name != testSourceAgentRules || sources[0].Catalog != "catalog/skills.tsv" {
 		t.Fatalf("unexpected sources: %#v", sources)
 	}
 }
 
 func TestUpdateScreenShowsCommandsWithoutRunningSelfUpdate(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.width = 120
-	m.height = 30
-	m.viewMode = viewUpdate
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.Width = 120
+	m.Height = 30
+	m.ViewMode = tui.ViewUpdate
 
 	view := stripANSI(m.View())
 	for _, want := range []string{
@@ -957,51 +1335,119 @@ func TestUpdateScreenShowsCommandsWithoutRunningSelfUpdate(t *testing.T) {
 	}
 }
 
+func TestUpdateScreenShowsProjectLockfileStatus(t *testing.T) {
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.Width = 120
+	m.Height = 30
+	m.ViewMode = tui.ViewUpdate
+	m.LockStatus = tui.ProjectLockStatus{
+		Present:   true,
+		Total:     3,
+		Missing:   1,
+		Changed:   1,
+		Unchanged: 1,
+		Skipped:   1,
+	}
+
+	view := stripANSI(m.View())
+	for _, want := range []string{
+		"Project lockfile",
+		"present",
+		"Rows: 3",
+		"Missing: 1",
+		"Changed: 1",
+		"Skipped: 1",
+		"r restore project lockfile",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected update screen to contain %q, got:\n%s", want, view)
+		}
+	}
+}
+
+func TestUpdateRestoreStartsBusyCommand(t *testing.T) {
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewUpdate
+	m.ProjectDir = testProjectPath
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	m = asModel(t, updated)
+	if cmd == nil || !m.Busy {
+		t.Fatalf("expected restore action to start busy command, busy=%v cmd=%v", m.Busy, cmd)
+	}
+	if !strings.Contains(m.Status, "Restoring project skills") {
+		t.Fatalf("expected restore status, got %q", m.Status)
+	}
+}
+
+func TestRestoreSummarySurvivesUpdateReload(t *testing.T) {
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewUpdate
+
+	updated, _ := m.Update(tui.CommandDoneMsg{
+		Action: "Restore project",
+		Output: "Restored project Skills: installed=1 updated=0 unchanged=0 skipped=0 failed=0\n",
+	})
+	m = asModel(t, updated)
+	if !m.Loading || m.ViewMode != tui.ViewUpdate {
+		t.Fatalf("expected update screen to reload after restore, view=%q loading=%v", m.ViewMode, m.Loading)
+	}
+
+	updated, _ = m.Update(tui.LockStatusLoadedMsg{Status: tui.ProjectLockStatus{Present: true, Total: 1, Unchanged: 1}})
+	m = asModel(t, updated)
+	if !strings.Contains(m.Status, "Restored project Skills: installed=1 updated=0 unchanged=0 skipped=0 failed=0") {
+		t.Fatalf("expected restore summary to remain visible, got %q", m.Status)
+	}
+}
+
 func TestAddSourceInputAcceptsDashboardShortcutDigits(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.viewMode = viewAddSource
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewAddSource
 
 	for _, key := range []string{"r", "u", "l", "e", "s", "-", "v", "2"} {
 		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
-		m = updated.(model)
+		m = asModel(t, updated)
 	}
 
-	if m.viewMode != viewAddSource {
-		t.Fatalf("expected to stay in add-source view, got %q", m.viewMode)
+	if m.ViewMode != tui.ViewAddSource {
+		t.Fatalf("expected to stay in add-source view, got %q", m.ViewMode)
 	}
-	if m.sourceInput != "rules-v2" {
-		t.Fatalf("expected source input to include digits, got %q", m.sourceInput)
+	if m.SourceInput != "rules-v2" {
+		t.Fatalf("expected source input to include digits, got %q", m.SourceInput)
 	}
 }
 
 func TestAddSourceArgsNormalizeBracketedURLAndName(t *testing.T) {
-	args := sourceAddArgs("[https://github.com/mattpocock/skills]", "[mattpocock]")
-	want := []string{"add", "https://github.com/mattpocock/skills", "--name", "mattpocock"}
+	args := tui.SourceAddArgs("[https://github.com/mattpocock/skills]", "[mattpocock]")
+	want := []string{testCommandAdd, testSourceURL, tui.FlagName, testSourceMattPocock}
 	if strings.Join(args, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("unexpected add source args: got %#v want %#v", args, want)
 	}
 
-	args = sourceAddArgs("[Skill repo](https://github.com/mattpocock/skills)", "")
-	want = []string{"add", "https://github.com/mattpocock/skills"}
+	args = tui.SourceAddArgs("[tui.Skill repo](https://github.com/mattpocock/skills)", "")
+	want = []string{testCommandAdd, testSourceURL}
 	if strings.Join(args, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("unexpected markdown-link add source args: got %#v want %#v", args, want)
 	}
 
-	args = sourceAddArgs("<https://github.com/mattpocock/skills>", "<mattpocock>")
-	want = []string{"add", "https://github.com/mattpocock/skills", "--name", "mattpocock"}
+	args = tui.SourceAddArgs("<https://github.com/mattpocock/skills>", "<mattpocock>")
+	want = []string{testCommandAdd, testSourceURL, tui.FlagName, testSourceMattPocock}
 	if strings.Join(args, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("unexpected angle-bracket add source args: got %#v want %#v", args, want)
 	}
 }
 
 func TestAddSourceEmptyFieldsDoNotLookPreFilled(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.viewMode = viewAddSource
-	m.width = 120
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewAddSource
+	m.Width = 120
 
-	view := stripANSI(m.addSourceContent(90))
+	view := stripANSI(m.AddSourceContent(90))
 	if strings.Contains(view, "Location path or git URL") || strings.Contains(view, "Name optional source name") {
 		t.Fatalf("empty fields should not render placeholder text as field values, got:\n%s", view)
 	}
@@ -1014,59 +1460,59 @@ func TestAddSourceEmptyFieldsDoNotLookPreFilled(t *testing.T) {
 }
 
 func TestAddSourceInputCapturesOptionalNameField(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.viewMode = viewAddSource
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewAddSource
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("https://github.com/mattpocock/skills")})
-	m = updated.(model)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(testSourceURL)})
+	m = asModel(t, updated)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	m = updated.(model)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("mattpocock")})
-	m = updated.(model)
+	m = asModel(t, updated)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(testSourceMattPocock)})
+	m = asModel(t, updated)
 
-	if m.sourceInput != "https://github.com/mattpocock/skills" {
-		t.Fatalf("expected source location input to be captured, got %q", m.sourceInput)
+	if m.SourceInput != testSourceURL {
+		t.Fatalf("expected source location input to be captured, got %q", m.SourceInput)
 	}
-	if m.sourceNameInput != "mattpocock" {
-		t.Fatalf("expected source name input to be captured, got %q", m.sourceNameInput)
+	if m.SourceNameInput != testSourceMattPocock {
+		t.Fatalf("expected source name input to be captured, got %q", m.SourceNameInput)
 	}
 }
 
 func TestInstalledCommandSummarySurvivesReload(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.viewMode = viewInstalled
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewInstalled
 
-	updated, _ := m.Update(commandDoneMsg{
-		action: "Update installed",
-		output: "Summary codex/global: updated=0 unchanged=1 skipped=0 failed=0\nUpdated: 0, unchanged: 1, skipped: 0, failed: 0\n",
+	updated, _ := m.Update(tui.CommandDoneMsg{
+		Action: "Update installed",
+		Output: "Summary codex/global: updated=0 unchanged=1 skipped=0 failed=0\nUpdated: 0, unchanged: 1, skipped: 0, failed: 0\n",
 	})
-	m = updated.(model)
-	if !m.loading {
+	m = asModel(t, updated)
+	if !m.Loading {
 		t.Fatalf("expected installed reload after update")
 	}
 
-	updated, _ = m.Update(installedLoadedMsg{rows: []InstalledSkill{
-		{Target: "codex", Scope: "global", Skill: "rules-selector", Managed: "yes", Source: "agent-rules", Path: "/tmp/skills/rules-selector"},
+	updated, _ = m.Update(tui.InstalledLoadedMsg{Rows: []tui.InstalledSkill{
+		testManagedInstalled("/tmp/skills/rules-selector"),
 	}})
-	m = updated.(model)
+	m = asModel(t, updated)
 
-	if !strings.Contains(m.status, "Updated: 0, unchanged: 1, skipped: 0, failed: 0") {
-		t.Fatalf("expected update summary to remain visible, got %q", m.status)
+	if !strings.Contains(m.Status, "Updated: 0, unchanged: 1, skipped: 0, failed: 0") {
+		t.Fatalf("expected update summary to remain visible, got %q", m.Status)
 	}
 }
 
 func TestQuestionMarkOpensHelpOverlay(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.width = 120
-	m.height = 30
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.Width = 120
+	m.Height = 30
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("?")})
-	m = updated.(model)
-	if m.viewMode != viewHelp {
-		t.Fatalf("expected help view, got %q", m.viewMode)
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewHelp {
+		t.Fatalf("expected help view, got %q", m.ViewMode)
 	}
 	view := stripANSI(m.View())
 	for _, want := range []string{
@@ -1085,126 +1531,137 @@ func TestQuestionMarkOpensHelpOverlay(t *testing.T) {
 }
 
 func TestLeftRightSwitchDashboardSections(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.width = 120
-	m.height = 30
-	m.viewMode = viewInstalled
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.Width = 120
+	m.Height = 30
+	m.ViewMode = tui.ViewInstalled
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
-	m = updated.(model)
-	if m.viewMode != viewSkills || !m.loading {
-		t.Fatalf("expected right from installed to load skills section, got view=%q loading=%v", m.viewMode, m.loading)
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewSkills || !m.Loading {
+		t.Fatalf("expected right from installed to load skills section, got view=%q loading=%v", m.ViewMode, m.Loading)
 	}
 
-	m.loading = false
+	m.Loading = false
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
-	m = updated.(model)
-	if m.viewMode != viewUsage || !m.loading {
-		t.Fatalf("expected right from installed to load usage section, got view=%q loading=%v", m.viewMode, m.loading)
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewUsage || !m.Loading {
+		t.Fatalf("expected right from installed to load usage section, got view=%q loading=%v", m.ViewMode, m.Loading)
 	}
 
-	m.loading = false
+	m.Loading = false
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyLeft})
-	m = updated.(model)
-	if m.viewMode != viewSkills || !m.loading {
-		t.Fatalf("expected left from usage to load skills section, got view=%q loading=%v", m.viewMode, m.loading)
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewSkills || !m.Loading {
+		t.Fatalf("expected left from usage to load skills section, got view=%q loading=%v", m.ViewMode, m.Loading)
 	}
 }
 
 func TestNumberKeysUseInstalledFirstDashboardOrder(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.width = 120
-	m.height = 30
-	m.viewMode = viewSkills
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.Width = 120
+	m.Height = 30
+	m.ViewMode = tui.ViewSkills
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("1")})
-	m = updated.(model)
-	if m.viewMode != viewInstalled || !m.loading {
-		t.Fatalf("expected 1 to load installed section, got view=%q loading=%v", m.viewMode, m.loading)
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewInstalled || !m.Loading {
+		t.Fatalf("expected 1 to load installed section, got view=%q loading=%v", m.ViewMode, m.Loading)
 	}
 
-	m.loading = false
+	m.Loading = false
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
-	m = updated.(model)
-	if m.viewMode != viewSkills || !m.loading {
-		t.Fatalf("expected 2 to load skills section, got view=%q loading=%v", m.viewMode, m.loading)
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewSkills || !m.Loading {
+		t.Fatalf("expected 2 to load skills section, got view=%q loading=%v", m.ViewMode, m.Loading)
 	}
 }
 
 func TestLeavingSkillsClearsSearch(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.viewMode = viewSkills
-	m.skills = []Skill{
-		{Source: "agent-rules", Name: "go-project-rules", Category: "go", Triggers: "go,golang", Description: "Go rules"},
-		{Source: "mattpocock", Name: "productivity_grill-me", Category: "productivity", Triggers: "grill", Description: "Grill me"},
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewSkills
+	m.Skills = []tui.Skill{
+		{
+			Source: testSourceAgentRules, Name: testSkillGoProjectRules,
+			Category: "go", Triggers: testTriggerGoGolang, Description: testDescGoRules,
+		},
+		{
+			Source: testSourceMattPocock, Name: testSkillGrillMe,
+			Category: testCategoryProductivity, Triggers: testTriggerGrill,
+			Description: testDescGrillMe,
+		},
 	}
-	m.search = "grill"
-	m.applyFilter()
-	if len(m.filtered) != 1 {
-		t.Fatalf("expected search to filter skills before navigation, got %d", len(m.filtered))
+	m.Search = testTriggerGrill
+	m.ApplyFilter()
+	if len(m.Filtered) != 1 {
+		t.Fatalf("expected search to filter skills before navigation, got %d", len(m.Filtered))
 	}
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
-	m = updated.(model)
-	if m.search != "" || m.searchMode {
-		t.Fatalf("expected skill search to reset when leaving Skills, got search=%q mode=%v", m.search, m.searchMode)
+	m = asModel(t, updated)
+	if m.Search != "" || m.SearchMode {
+		t.Fatalf("expected skill search to reset when leaving Skills, got search=%q mode=%v", m.Search, m.SearchMode)
 	}
-	if len(m.filtered) != 2 {
-		t.Fatalf("expected skill list filter to reset, got %d", len(m.filtered))
+	if len(m.Filtered) != 2 {
+		t.Fatalf("expected skill list filter to reset, got %d", len(m.Filtered))
 	}
 }
 
 func TestHeaderHighlightsActiveSearch(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.width = 120
-	m.search = "grill"
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.Width = 120
+	m.Search = testTriggerGrill
 
-	view := m.renderHeader(120)
-	if !strings.Contains(view, "Search: ") || !strings.Contains(view, "grill") {
+	view := m.RenderHeader(120)
+	if !strings.Contains(view, "Search: ") || !strings.Contains(view, testTriggerGrill) {
 		t.Fatalf("expected header to show active search, got:\n%s", stripANSI(view))
 	}
-	if got := searchBadgeStyle.GetBackground(); got != lipgloss.Color("63") {
+	if got := tui.SearchBadgeStyle.GetBackground(); got != lipgloss.Color("63") {
 		t.Fatalf("expected active search badge background, got %#v", got)
 	}
-	if got := searchBadgeStyle.GetBold(); !got {
+	if got := tui.SearchBadgeStyle.GetBold(); !got {
 		t.Fatalf("expected active search badge to be bold")
 	}
 }
 
 func TestLeftRightDoesNotLeaveInstallTargetPicker(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.viewMode = viewTargets
-	m.targetPurpose = "install"
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewTargets
+	m.TargetPurpose = tui.TargetPurposeInstall
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
-	m = updated.(model)
-	if m.viewMode != viewTargets || m.loading {
-		t.Fatalf("expected install target picker to ignore right arrow, got view=%q loading=%v", m.viewMode, m.loading)
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewTargets || m.Loading {
+		t.Fatalf("expected install target picker to ignore right arrow, got view=%q loading=%v", m.ViewMode, m.Loading)
 	}
 }
 
 func TestSkillSelectionUsesSoftActiveAndGreenSelectedStyles(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.viewMode = viewSkills
-	m.width = 120
-	m.height = 30
-	m.skills = []Skill{
-		{Source: "agent-rules", Name: "go-project-rules", Category: "go", Triggers: "go,golang", Description: "Go project rules"},
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewSkills
+	m.Width = 120
+	m.Height = 30
+	m.Skills = []tui.Skill{
+		{
+			Source: testSourceAgentRules, Name: testSkillGoProjectRules,
+			Category: "go", Triggers: testTriggerGoGolang,
+			Description: testDescGoProjectRules,
+		},
 	}
-	m.applyFilter()
-	m.toggleCurrent()
+	m.ApplyFilter()
+	m.ToggleCurrent()
 
 	view := m.View()
-	if got := activeRowStyle.GetBackground(); got != (lipgloss.NoColor{}) {
+	if got := tui.ActiveRowStyle.GetBackground(); got != (lipgloss.NoColor{}) {
 		t.Fatalf("active row should not use a strong background, got %#v", got)
 	}
-	if got := selectedRowStyle.GetForeground(); got != lipgloss.Color("42") {
+	if got := tui.SelectedRowStyle.GetForeground(); got != lipgloss.Color("42") {
 		t.Fatalf("selected row should use green foreground, got %#v", got)
 	}
 	if !strings.Contains(stripANSI(view), "[✓] go-project-rules") {
@@ -1213,22 +1670,22 @@ func TestSkillSelectionUsesSoftActiveAndGreenSelectedStyles(t *testing.T) {
 }
 
 func TestViewGroupsSkillsByCategoryTree(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.viewMode = viewSkills
-	m.width = 120
-	m.height = 30
-	m.skills = []Skill{
-		{Source: "agent-rules", Name: "go-project-rules", Category: "go", Description: "Go project rules"},
-		{Source: "agent-rules", Name: "docs-project-rules", Category: "documentation", Description: "Documentation rules"},
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewSkills
+	m.Width = 120
+	m.Height = 30
+	m.Skills = []tui.Skill{
+		{Source: testSourceAgentRules, Name: testSkillGoProjectRules, Category: "go", Description: testDescGoProjectRules},
+		{Source: testSourceAgentRules, Name: testSkillDocsProject, Category: testDocsCategory, Description: "Documentation rules"},
 	}
-	m.applyFilter()
+	m.ApplyFilter()
 
 	view := stripANSI(m.View())
 	for _, want := range []string{
 		"• documentation",
 		"└─ [ ] docs-project-rules",
-		"• go",
+		testBulletGo,
 		"└─ [ ] go-project-rules",
 	} {
 		if !strings.Contains(view, want) {
@@ -1238,25 +1695,36 @@ func TestViewGroupsSkillsByCategoryTree(t *testing.T) {
 }
 
 func TestSkillsListShowsManagedInstalledBadge(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.viewMode = viewSkills
-	m.width = 120
-	m.height = 30
-	m.skills = []Skill{
-		{Source: "mattpocock", Name: "productivity_grill-me", Category: "productivity", Description: "Grill me"},
-		{Source: "agent-rules", Name: "go-project-rules", Category: "go", Description: "Go rules"},
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewSkills
+	m.Width = 120
+	m.Height = 30
+	m.Skills = []tui.Skill{
+		{Source: testSourceMattPocock, Name: testSkillGrillMe, Category: testCategoryProductivity, Description: testDescGrillMe},
+		{Source: testSourceAgentRules, Name: testSkillGoProjectRules, Category: "go", Description: testDescGoRules},
 	}
-	m.installedRows = []InstalledSkill{
-		{Target: "claude", Scope: "global", Source: "mattpocock", Skill: "productivity_grill-me", QualifiedSkill: "mattpocock/productivity_grill-me", Managed: "yes", Path: "/home/me/.claude/skills/productivity_grill-me"},
-		{Target: "codex", Scope: "project", Source: "mattpocock", Skill: "productivity_grill-me", QualifiedSkill: "mattpocock/productivity_grill-me", Managed: "yes", ProjectPath: "/repo", Path: "/repo/.agents/skills/productivity_grill-me"},
-		{Target: "codex", Scope: "global", Source: "-", Skill: "go-project-rules", Managed: "no", Path: "/home/me/.agents/skills/go-project-rules"},
+	m.InstalledRows = []tui.InstalledSkill{
+		{
+			Target: tui.TargetClaude, Scope: tui.ScopeGlobal, Source: testSourceMattPocock, Skill: testSkillGrillMe,
+			QualifiedSkill: testQualifiedGrillMe, Managed: tui.ManagedYes,
+			Path: testGrillMeClaudePath,
+		},
+		{
+			Target: tui.TargetCodex, Scope: tui.ScopeProject, Source: testSourceMattPocock, Skill: testSkillGrillMe,
+			QualifiedSkill: testQualifiedGrillMe, Managed: tui.ManagedYes,
+			ProjectPath: "/repo", Path: "/repo/.agents/skills/productivity_grill-me",
+		},
+		{
+			Target: tui.TargetCodex, Scope: tui.ScopeGlobal, Source: "-", Skill: testSkillGoProjectRules,
+			Managed: "no", Path: "/home/me/.agents/skills/go-project-rules",
+		},
 	}
-	m.applyFilter()
+	m.ApplyFilter()
 
 	view := stripANSI(m.View())
 	for _, want := range []string{
-		"productivity_grill-me",
+		testSkillGrillMe,
 		"installed: 2 locations",
 	} {
 		if !strings.Contains(view, want) {
@@ -1269,35 +1737,35 @@ func TestSkillsListShowsManagedInstalledBadge(t *testing.T) {
 }
 
 func TestSkillDetailsShowsInstalledLocations(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.viewMode = viewSkills
-	m.width = 120
-	m.height = 40
-	m.skills = []Skill{
-		{Source: "mattpocock", Name: "productivity_grill-me", Category: "productivity", Description: "Grill me"},
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewSkills
+	m.Width = 120
+	m.Height = 40
+	m.Skills = []tui.Skill{
+		{Source: testSourceMattPocock, Name: testSkillGrillMe, Category: testCategoryProductivity, Description: testDescGrillMe},
 	}
-	m.installedRows = []InstalledSkill{
+	m.InstalledRows = []tui.InstalledSkill{
 		{
-			Target:         "claude",
-			Scope:          "global",
-			Source:         "mattpocock",
-			Skill:          "productivity_grill-me",
-			QualifiedSkill: "mattpocock/productivity_grill-me",
-			Managed:        "yes",
-			Path:           "/home/me/.claude/skills/productivity_grill-me",
+			Target:         tui.TargetClaude,
+			Scope:          tui.ScopeGlobal,
+			Source:         testSourceMattPocock,
+			Skill:          testSkillGrillMe,
+			QualifiedSkill: testQualifiedGrillMe,
+			Managed:        tui.ManagedYes,
+			Path:           testGrillMeClaudePath,
 			RegistryOnly:   true,
 		},
 	}
-	m.applyFilter()
+	m.ApplyFilter()
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = updated.(model)
+	m = asModel(t, updated)
 	view := stripANSI(m.View())
 	for _, want := range []string{
 		"Installed locations",
-		"Claude global",
-		"/home/me/.claude/skills/productivity_grill-me",
+		testLabelClaudeGlobal,
+		testGrillMeClaudePath,
 		"managed registry",
 	} {
 		if !strings.Contains(view, want) {
@@ -1307,35 +1775,38 @@ func TestSkillDetailsShowsInstalledLocations(t *testing.T) {
 }
 
 func TestSmallHeightViewKeepsDashboardHeaderVisible(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.viewMode = viewSkills
-	m.width = 120
-	m.height = 18
-	m.skills = []Skill{
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewSkills
+	m.Width = 120
+	m.Height = 18
+	m.Skills = []tui.Skill{
 		{
-			Source:      "agent-rules",
-			Name:        "reusable-module-rules",
-			Category:    "architecture",
-			Triggers:    "reusable module,library,public surface,external consumer,release readiness,replace",
-			Description: "Global reusable-module rules for public facades, supported import surfaces, clean consumer probes, and host/library ownership.",
+			Source:   testSourceAgentRules,
+			Name:     "reusable-module-rules",
+			Category: "architecture",
+			Triggers: "reusable module,library,public surface,external consumer,release readiness,replace",
+			Description: "Global reusable-module rules for public facades, supported import surfaces, " +
+				"clean consumer probes, and host/library ownership.",
 		},
 		{
-			Source:      "mattpocock",
-			Name:        "deprecated_design-an-interface",
-			Category:    "deprecated",
-			Triggers:    "deprecated,design-an-interface",
-			Description: "Generate multiple radically different interface designs for a module using parallel sub-agents. Use when user wants to design an API, explore interface options, compare module shapes, or mentions design it twice.",
+			Source:   testSourceMattPocock,
+			Name:     "deprecated_design-an-interface",
+			Category: "deprecated",
+			Triggers: "deprecated,design-an-interface",
+			Description: "Generate multiple radically different interface designs for a module using parallel sub-agents. " +
+				"Use when user wants to design an API, explore interface options, compare module shapes, or mentions design it twice.",
 		},
 		{
-			Source:      "mattpocock",
-			Name:        "deprecated_qa",
-			Category:    "deprecated",
-			Triggers:    "deprecated,qa",
-			Description: "Interactive QA session where user reports bugs or issues conversationally, and the agent files GitHub issues. Explores the codebase in the background for context and domain language.",
+			Source:   testSourceMattPocock,
+			Name:     "deprecated_qa",
+			Category: "deprecated",
+			Triggers: "deprecated,qa",
+			Description: "Interactive QA session where user reports bugs or issues conversationally, and the agent files GitHub issues. " +
+				"Explores the codebase in the background for context and domain language.",
 		},
 	}
-	m.applyFilter()
+	m.ApplyFilter()
 
 	view := stripANSI(m.View())
 	for _, want := range []string{"Skillhub", "Sources: 2", "1 Installed", "2 Skills", "6 Update"} {
@@ -1343,8 +1814,8 @@ func TestSmallHeightViewKeepsDashboardHeaderVisible(t *testing.T) {
 			t.Fatalf("expected small-height view to keep dashboard text %q visible, got:\n%s", want, view)
 		}
 	}
-	if got := lipgloss.Height(view); got > m.height {
-		t.Fatalf("expected rendered view to fit height %d, got %d lines:\n%s", m.height, got, view)
+	if got := lipgloss.Height(view); got > m.Height {
+		t.Fatalf("expected rendered view to fit height %d, got %d lines:\n%s", m.Height, got, view)
 	}
 }
 
@@ -1352,14 +1823,14 @@ func TestParseDefaultSourcesTSV(t *testing.T) {
 	input := "name\ttype\tlocation\tref\tcatalog\n" +
 		"agent-rules\tgit\tgit@github.com:assurrussa/agent-rules.git\tmain\tcatalog/skills.tsv\n"
 
-	sources, err := parseDefaultSourcesTSV(input)
+	sources, err := tui.ParseDefaultSourcesTSV(input)
 	if err != nil {
-		t.Fatalf("parseDefaultSourcesTSV returned error: %v", err)
+		t.Fatalf("tui.ParseDefaultSourcesTSV returned error: %v", err)
 	}
 	if len(sources) != 1 {
 		t.Fatalf("expected 1 source, got %d", len(sources))
 	}
-	if sources[0].Name != "agent-rules" || sources[0].Type != "git" {
+	if sources[0].Name != testSourceAgentRules || sources[0].Type != "git" {
 		t.Fatalf("unexpected source preset: %#v", sources[0])
 	}
 }
@@ -1368,15 +1839,38 @@ func TestParseTargetsTSV(t *testing.T) {
 	input := "id\tlabel\tstatus\tadapter\tdescription\n" +
 		"claude\tClaude\tsupported\tskill-dir\tClaude skills\n"
 
-	targets, err := parseTargetsTSV(input)
+	targets, err := tui.ParseTargetsTSV(input)
 	if err != nil {
-		t.Fatalf("parseTargetsTSV returned error: %v", err)
+		t.Fatalf("tui.ParseTargetsTSV returned error: %v", err)
 	}
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 target, got %d", len(targets))
 	}
-	if targets[0].ID != "claude" || targets[0].Adapter != "skill-dir" {
+	if targets[0].ID != tui.TargetClaude || targets[0].Adapter != testAdapterSkillDir {
 		t.Fatalf("unexpected target: %#v", targets[0])
+	}
+}
+
+func TestLoadTargetsUsesGoBackend(t *testing.T) {
+	tmp := t.TempDir()
+	repo := filepath.Join(tmp, "repo")
+	writeFakeTUIRepo(t, repo)
+	t.Setenv("HOME", filepath.Join(tmp, "home"))
+	t.Setenv("SKILLHUB_CONFIG_DIR", filepath.Join(tmp, "config"))
+
+	msg := tui.LoadTargets(repo)()
+	loaded, ok := msg.(tui.TargetsLoadedMsg)
+	if !ok {
+		t.Fatalf("expected tui.TargetsLoadedMsg, got %T", msg)
+	}
+	if loaded.Err != nil {
+		t.Fatalf("tui.LoadTargets should use Go backend, got error: %v", loaded.Err)
+	}
+	if len(loaded.Targets) != 2 || loaded.Targets[0].ID != tui.TargetCodex {
+		t.Fatalf("unexpected Targets: %#v", loaded.Targets)
+	}
+	if len(loaded.Detections) == 0 || loaded.Detections[0].Target != tui.TargetCodex {
+		t.Fatalf("unexpected Detections: %#v", loaded.Detections)
 	}
 }
 
@@ -1384,88 +1878,304 @@ func TestParseTargetDetectionsTSV(t *testing.T) {
 	input := "target\tscope\tstatus\tpath\texists\tskills\tmanaged\n" +
 		"claude\tproject\tsupported\t/tmp/project/.claude/skills\tyes\t3\t2\n"
 
-	detections, err := parseTargetDetectionsTSV(input)
+	detections, err := tui.ParseTargetDetectionsTSV(input)
 	if err != nil {
-		t.Fatalf("parseTargetDetectionsTSV returned error: %v", err)
+		t.Fatalf("tui.ParseTargetDetectionsTSV returned error: %v", err)
 	}
 	if len(detections) != 1 {
 		t.Fatalf("expected 1 detection, got %d", len(detections))
 	}
 	got := detections[0]
-	if got.Target != "claude" || got.Scope != "project" || got.Exists != "yes" || got.Skills != "3" || got.Managed != "2" {
+	if got.Target != tui.TargetClaude ||
+		got.Scope != tui.ScopeProject ||
+		got.Exists != tui.ManagedYes ||
+		got.Skills != "3" ||
+		got.Managed != "2" {
 		t.Fatalf("unexpected detection: %#v", got)
 	}
 }
 
-func TestInstallOpensTargetSelection(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.viewMode = viewSkills
-	m.width = 120
-	m.height = 80
-	m.skills = []Skill{
-		{Source: "agent-rules", Name: "go-project-rules", Category: "go", Description: "Go project rules"},
+func TestInstallStartsScopeWizard(t *testing.T) {
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewSkills
+	m.Width = 120
+	m.Height = 80
+	m.Skills = []tui.Skill{
+		{Source: testSourceAgentRules, Name: testSkillGoProjectRules, Category: "go", Description: testDescGoProjectRules},
 	}
-	m.applyFilter()
-	m.toggleCurrent()
+	m.ApplyFilter()
+	m.ToggleCurrent()
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
-	m = updated.(model)
-	if !m.loading {
-		t.Fatalf("expected install to load targets")
+	m = asModel(t, updated)
+	if m.Loading {
+		t.Fatalf("expected scope wizard to render without loading targets")
 	}
-
-	updated, _ = m.Update(targetsLoadedMsg{targets: []Target{
-		{ID: "codex", Label: "Codex", Status: "supported", Adapter: "skill-dir", Description: "Codex skills"},
-		{ID: "claude", Label: "Claude", Status: "supported", Adapter: "skill-dir", Description: "Claude skills"},
-		{ID: "gemini", Label: "Gemini", Status: "supported", Adapter: "skill-dir", Description: "Gemini skills"},
-		{ID: "opencode", Label: "OpenCode", Status: "supported", Adapter: "skill-dir", Description: "OpenCode skills"},
-		{ID: "cursor", Label: "Cursor", Status: "planned", Adapter: "planned", Description: "Planned"},
-	}})
-	m = updated.(model)
-	if m.viewMode != viewTargets {
-		t.Fatalf("expected target selection view, got %q", m.viewMode)
+	if m.ViewMode != tui.ViewInstallScope {
+		t.Fatalf("expected install scope wizard, got %q", m.ViewMode)
 	}
-	if !m.selectedTargets["codex:global"] {
-		t.Fatalf("expected Codex global to be selected by default")
+	if m.InstallScope != tui.ScopeProject {
+		t.Fatalf("expected project default scope, got %q", m.InstallScope)
 	}
 
 	view := stripANSI(m.View())
 	for _, want := range []string{
-		"Install targets",
-		"[✓] Codex global",
-		"[ ] Claude global",
-		"[ ] Gemini global",
-		"[ ] OpenCode global",
-		"[-] Cursor",
+		"Install scope",
+		"Project",
+		"Current project",
+		"User",
+		"Global skills directory",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected scope wizard to contain %q, got:\n%s", want, view)
+		}
+	}
+}
+
+func TestInstallFlowStateRoundTripsThroughTestModelFacade(t *testing.T) {
+	m := tui.InitialModel(".")
+	m.ViewMode = tui.ViewInstallScope
+	m.InstallScope = tui.ScopeGlobal
+	m.InstallScopeCursor = 1
+	m.TargetPurpose = tui.TargetPurposeInstall
+	m.TargetChoices = []tui.InstallTargetChoice{
+		testTargetChoice(testCodexGlobalKey, tui.TargetCodex, testLabelCodexGlobal, tui.ScopeGlobal, testSkillsRoot),
+	}
+	m.SelectedTargets = map[string]bool{testCodexGlobalKey: true}
+	m.PendingInstall = tui.InstallResult{SkillNames: []string{testQualifiedGoRules}}
+	m.InstallResult = tui.InstallResult{
+		SkillNames: []string{testQualifiedGoRules},
+		Targets: []tui.InstallTargetResult{
+			{Label: testLabelCodexGlobal, Target: tui.TargetCodex, Scope: tui.ScopeGlobal, Root: testSkillsRoot},
+		},
+	}
+
+	const permissionDenied = "permission denied"
+	m.InstallProgress = tui.TestInstallProgress{
+		Current: 1, Total: 2, Failed: true, Error: permissionDenied,
+	}
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = asModel(t, updated)
+	if m.InstallScope != tui.ScopeGlobal || m.InstallScopeCursor != 1 {
+		t.Fatalf("expected scope state to round-trip, got scope=%q cursor=%d", m.InstallScope, m.InstallScopeCursor)
+	}
+	if m.TargetPurpose != tui.TargetPurposeInstall ||
+		len(m.TargetChoices) != 1 ||
+		!m.SelectedTargets[testCodexGlobalKey] {
+		t.Fatalf("expected target selection state to round-trip, got purpose=%q choices=%#v selected=%#v",
+			m.TargetPurpose, m.TargetChoices, m.SelectedTargets)
+	}
+	if len(m.PendingInstall.SkillNames) != 1 || len(m.InstallResult.Targets) != 1 {
+		t.Fatalf("expected install result state to round-trip, pending=%#v result=%#v", m.PendingInstall, m.InstallResult)
+	}
+	if !m.InstallProgress.Failed || m.InstallProgress.Error != permissionDenied || m.InstallProgress.Total != 2 {
+		t.Fatalf("expected progress state to round-trip, got %#v", m.InstallProgress)
+	}
+}
+
+func TestInstallWizardTargetsSupportedAgentsAndDetectedDefaults(t *testing.T) {
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewInstallScope
+	m.InstallScope = tui.ScopeProject
+	m.Width = 120
+	m.Height = 80
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = asModel(t, updated)
+	if !m.Loading {
+		t.Fatalf("expected scope confirm to load targets")
+	}
+	updated, _ = m.Update(tui.TargetsLoadedMsg{Targets: []tui.Target{
+		testSupportedTarget(tui.TargetCodex, tui.LabelCodex, testCodexSkillsDesc),
+		testSupportedTarget(tui.TargetClaude, tui.LabelClaude, testClaudeSkillsDesc),
+		testSupportedTarget(tui.TargetGemini, tui.LabelGemini, testGeminiSkillsDesc),
+		testSupportedTarget(testTargetOpenCode, testLabelOpenCode, testOpenCodeSkillsDesc),
+		testPlannedTarget(testTargetCursor, testLabelCursor),
+	}, Detections: []tui.TargetDetection{
+		{
+			Target: tui.TargetClaude, Scope: tui.ScopeProject, Status: tui.TargetStatusSupported,
+			Path: "/tmp/project/.claude/skills", Exists: tui.ManagedYes, Skills: "2", Managed: "1",
+		},
+		{
+			Target: tui.TargetGemini, Scope: tui.ScopeProject, Status: tui.TargetStatusSupported,
+			Path: "/tmp/project/.gemini/skills", Exists: tui.ManagedYes, Skills: "1", Managed: "0",
+		},
+	}})
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewTargets {
+		t.Fatalf("expected agent target step, got %q", m.ViewMode)
+	}
+	if m.SelectedTargets[testCodexProjectKey] || !m.SelectedTargets["claude:project"] || !m.SelectedTargets["gemini:project"] {
+		t.Fatalf("expected detected project targets only, got %#v", m.SelectedTargets)
+	}
+
+	view := stripANSI(m.View())
+	for _, want := range []string{
+		"Install agents",
+		"[ ] Codex",
+		"[✓] Claude",
+		"[✓] Gemini",
+		"[ ] OpenCode",
+		"scope: project",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected target view to contain %q, got:\n%s", want, view)
 		}
 	}
+	if strings.Contains(view, testLabelCursor) {
+		t.Fatalf("planned targets should not appear in install agent step, got:\n%s", view)
+	}
+}
+
+func TestInstallWizardTargetFallbackSelectsCodexProject(t *testing.T) {
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewInstallScope
+	m.InstallScope = tui.ScopeProject
+	m.TargetPurpose = tui.TargetPurposeInstall
+
+	updated, _ := m.Update(tui.TargetsLoadedMsg{Targets: []tui.Target{
+		testSupportedTarget(tui.TargetCodex, tui.LabelCodex, testCodexSkillsDesc),
+		testSupportedTarget(tui.TargetClaude, tui.LabelClaude, testClaudeSkillsDesc),
+	}})
+	m = asModel(t, updated)
+	if !m.SelectedTargets[testCodexProjectKey] || m.SelectedTargets["claude:project"] {
+		t.Fatalf("expected Codex project fallback, got %#v", m.SelectedTargets)
+	}
+}
+
+func TestInstallWizardUserScopeBuildsGlobalAgentChoices(t *testing.T) {
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewInstallScope
+	m.InstallScope = tui.ScopeProject
+	m.InstallScopeCursor = 0
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = asModel(t, updated)
+	if m.InstallScope != tui.ScopeGlobal {
+		t.Fatalf("expected User selection to map to global scope, got %q", m.InstallScope)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = asModel(t, updated)
+	updated, _ = m.Update(tui.TargetsLoadedMsg{Targets: []tui.Target{
+		testSupportedTarget(tui.TargetCodex, tui.LabelCodex, testCodexSkillsDesc),
+		testSupportedTarget(tui.TargetClaude, tui.LabelClaude, testClaudeSkillsDesc),
+	}})
+	m = asModel(t, updated)
+	for _, choice := range m.TargetChoices {
+		if choice.Scope != tui.ScopeGlobal {
+			t.Fatalf("expected only global choices for User scope, got %#v", m.TargetChoices)
+		}
+	}
+	if !m.SelectedTargets[testCodexGlobalKey] {
+		t.Fatalf("expected Codex global fallback, got %#v", m.SelectedTargets)
+	}
+}
+
+func TestInstallWizardConfirmRendersSelectionAndStartsInstall(t *testing.T) {
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewTargets
+	m.TargetPurpose = tui.TargetPurposeInstall
+	m.Width = 120
+	m.Height = 40
+	m.ProjectDir = testProjectPath
+	m.Selected = map[string]bool{
+		testQualifiedGoRules: true,
+	}
+	m.TargetChoices = []tui.InstallTargetChoice{
+		testTargetChoice(testCodexProjectKey, tui.TargetCodex, tui.LabelCodex, tui.ScopeProject, testProjectSkillsRoot),
+		testTargetChoice("claude:project", tui.TargetClaude, tui.LabelClaude, tui.ScopeProject, "/tmp/project/.claude/skills"),
+	}
+	m.SelectedTargets = map[string]bool{
+		testCodexProjectKey: true,
+		"claude:project":    true,
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewInstallConfirm {
+		t.Fatalf("expected confirm screen, got %q", m.ViewMode)
+	}
+	view := stripANSI(m.View())
+	for _, want := range []string{
+		"Confirm install",
+		testQualifiedGoRules,
+		"Scope",
+		"Project",
+		tui.LabelCodex,
+		"/tmp/project/.agents/skills/go-project-rules",
+		tui.LabelClaude,
+		"/tmp/project/.claude/skills/go-project-rules",
+		"enter/y install",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected confirm screen to contain %q, got:\n%s", want, view)
+		}
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = asModel(t, updated)
+	if cmd == nil || !m.Busy || m.InstallProgress.Total != 2 {
+		t.Fatalf("expected confirmed install to start 2-step queue, busy=%v progress=%#v cmd=%v", m.Busy, m.InstallProgress, cmd)
+	}
+}
+
+func TestInstallWizardBackNavigation(t *testing.T) {
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewTargets
+	m.TargetPurpose = tui.TargetPurposeInstall
+	m.TargetChoices = []tui.InstallTargetChoice{
+		{Key: testCodexProjectKey, Target: tui.TargetCodex, Label: tui.LabelCodex, Scope: tui.ScopeProject, Supported: true},
+	}
+	m.SelectedTargets = map[string]bool{testCodexProjectKey: true}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewInstallScope {
+		t.Fatalf("expected esc from agents to return to scope, got %q", m.ViewMode)
+	}
+
+	m.ViewMode = tui.ViewInstallConfirm
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewTargets {
+		t.Fatalf("expected esc from confirm to return to agents, got %q", m.ViewMode)
+	}
 }
 
 func TestTargetSelectionShowsDetectionStats(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.width = 120
-	m.height = 30
-	m.projectDir = "/tmp/project"
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.Width = 120
+	m.Height = 30
+	m.ProjectDir = testProjectPath
 
-	updated, _ := m.Update(targetsLoadedMsg{
-		targets: []Target{
-			{ID: "claude", Label: "Claude", Status: "supported", Adapter: "skill-dir", Description: "Claude skills"},
+	updated, _ := m.Update(tui.TargetsLoadedMsg{
+		Targets: []tui.Target{
+			testSupportedTarget(tui.TargetClaude, tui.LabelClaude, testClaudeSkillsDesc),
 		},
-		detections: []TargetDetection{
-			{Target: "claude", Scope: "global", Status: "supported", Path: "/home/me/.claude/skills", Exists: "yes", Skills: "4", Managed: "2"},
-			{Target: "claude", Scope: "project", Status: "supported", Path: "/tmp/project/.claude/skills", Exists: "no", Skills: "0", Managed: "0"},
+		Detections: []tui.TargetDetection{
+			{
+				Target: tui.TargetClaude, Scope: tui.ScopeGlobal, Status: tui.TargetStatusSupported,
+				Path: "/home/me/.claude/skills", Exists: tui.ManagedYes, Skills: "4", Managed: "2",
+			},
+			{
+				Target: tui.TargetClaude, Scope: tui.ScopeProject, Status: tui.TargetStatusSupported,
+				Path: "/tmp/project/.claude/skills", Exists: "no", Skills: "0", Managed: "0",
+			},
 		},
 	})
-	m = updated.(model)
+	m = asModel(t, updated)
 
 	view := stripANSI(m.View())
 	for _, want := range []string{
-		"Claude global",
+		testLabelClaudeGlobal,
 		"/home/me/.claude/skills",
 		"exists: yes",
 		"skills: 4",
@@ -1480,66 +2190,70 @@ func TestTargetSelectionShowsDetectionStats(t *testing.T) {
 }
 
 func TestInstallSuccessOpensResultScreen(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.width = 120
-	m.height = 40
-	m.selected = map[string]bool{
-		"agent-rules/go-project-rules": true,
-		"agent-rules/rules-selector":   true,
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.Width = 120
+	m.Height = 40
+	m.Selected = map[string]bool{
+		testQualifiedGoRules: true,
+		testQualifiedRules:   true,
 	}
-	m.targetChoices = []InstallTargetChoice{
-		{Key: "codex:global", Target: "codex", Label: "Codex global", Scope: "global", Status: "supported", Path: "/tmp/skills", Supported: true},
-		{Key: "claude:project", Target: "claude", Label: "Claude project", Scope: "project", Status: "supported", Path: "/tmp/project/.claude/skills", Supported: true},
+	m.TargetChoices = []tui.InstallTargetChoice{
+		testTargetChoice(testCodexGlobalKey, tui.TargetCodex, testLabelCodexGlobal, tui.ScopeGlobal, testSkillsRoot),
+		testTargetChoice("claude:project", tui.TargetClaude, "Claude project", tui.ScopeProject, "/tmp/project/.claude/skills"),
 	}
-	m.selectedTargets = map[string]bool{
-		"codex:global": true,
+	m.SelectedTargets = map[string]bool{
+		testCodexGlobalKey: true,
 	}
 
-	updated, _ := m.installToSelectedTargets()
-	m = updated.(model)
-	if !m.busy {
+	updated, _ := m.InstallToSelectedTargets()
+	m = asModel(t, updated)
+	if !m.Busy {
 		t.Fatalf("expected install to mark TUI busy")
 	}
-	if m.installProgress.Total != 2 || m.installProgress.Current != 1 {
-		t.Fatalf("expected queued install progress 1/2, got %#v", m.installProgress)
+	if m.InstallProgress.Total != 2 || m.InstallProgress.Current != 1 {
+		t.Fatalf("expected queued install progress 1/2, got %#v", m.InstallProgress)
 	}
 
-	updated, _ = m.Update(installStepDoneMsg{
-		output: "Installed go-project-rules from agent-rules to /tmp/skills/go-project-rules\n",
+	updated, _ = m.Update(tui.InstallStepDoneMsg{
+		Output: "Installed go-project-rules from agent-rules to /tmp/skills/go-project-rules\n",
 	})
-	m = updated.(model)
-	if !m.busy || m.installProgress.Current != 2 || m.installProgress.Completed != 1 {
-		t.Fatalf("expected queued install progress 2/2 after first step, got busy=%v progress=%#v", m.busy, m.installProgress)
+	m = asModel(t, updated)
+	if !m.Busy || m.InstallProgress.Current != 2 || m.InstallProgress.Completed != 1 {
+		t.Fatalf("expected queued install progress 2/2 after first step, got busy=%v progress=%#v", m.Busy, m.InstallProgress)
 	}
 
-	updated, cmd := m.Update(installStepDoneMsg{
-		output: "Installed rules-selector from agent-rules to /tmp/skills/rules-selector\n",
+	updated, cmd := m.Update(tui.InstallStepDoneMsg{
+		Output: "Installed rules-selector from agent-rules to /tmp/skills/rules-selector\n",
 	})
-	m = updated.(model)
-	if m.viewMode != viewInstallResult {
-		t.Fatalf("expected install result view, got %q", m.viewMode)
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewInstallResult {
+		t.Fatalf("expected install result view, got %q", m.ViewMode)
 	}
 	if cmd == nil {
 		t.Fatalf("expected install completion to refresh installed rows")
 	}
-	updated, _ = m.Update(installedLoadedMsg{rows: []InstalledSkill{
-		{Target: "codex", Scope: "global", Source: "agent-rules", Skill: "go-project-rules", QualifiedSkill: "agent-rules/go-project-rules", Managed: "yes", Path: "/tmp/skills/go-project-rules"},
+	updated, _ = m.Update(tui.InstalledLoadedMsg{Rows: []tui.InstalledSkill{
+		{
+			Target: tui.TargetCodex, Scope: tui.ScopeGlobal, Source: testSourceAgentRules, Skill: testSkillGoProjectRules,
+			QualifiedSkill: testQualifiedGoRules, Managed: tui.ManagedYes,
+			Path: testGoRulesPath,
+		},
 	}})
-	m = updated.(model)
-	if m.viewMode != viewInstallResult {
-		t.Fatalf("expected installed refresh to keep result view, got %q", m.viewMode)
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewInstallResult {
+		t.Fatalf("expected installed refresh to keep result view, got %q", m.ViewMode)
 	}
-	if len(m.installedRows) != 1 {
-		t.Fatalf("expected installed rows to refresh, got %#v", m.installedRows)
+	if len(m.InstalledRows) != 1 {
+		t.Fatalf("expected installed rows to refresh, got %#v", m.InstalledRows)
 	}
 
 	view := stripANSI(m.View())
 	for _, want := range []string{
 		"Install complete",
-		"Codex global",
-		"/tmp/skills",
-		"/tmp/skills/go-project-rules",
+		testLabelCodexGlobal,
+		testSkillsRoot,
+		testGoRulesPath,
 		"/tmp/skills/rules-selector",
 		"enter back",
 		"q quit",
@@ -1551,25 +2265,25 @@ func TestInstallSuccessOpensResultScreen(t *testing.T) {
 }
 
 func TestInstallProgressViewShowsCurrentStep(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.width = 120
-	m.height = 32
-	m.selected = map[string]bool{
-		"agent-rules/go-project-rules": true,
-		"mattpocock/engineering_tdd":   true,
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.Width = 120
+	m.Height = 32
+	m.Selected = map[string]bool{
+		testQualifiedGoRules:         true,
+		"mattpocock/engineering_tdd": true,
 	}
-	m.targetChoices = []InstallTargetChoice{
-		{Key: "codex:global", Target: "codex", Label: "Codex global", Scope: "global", Status: "supported", Path: "/tmp/codex", Supported: true},
-		{Key: "claude:global", Target: "claude", Label: "Claude global", Scope: "global", Status: "supported", Path: "/tmp/claude", Supported: true},
+	m.TargetChoices = []tui.InstallTargetChoice{
+		testTargetChoice(testCodexGlobalKey, tui.TargetCodex, testLabelCodexGlobal, tui.ScopeGlobal, "/tmp/codex"),
+		testTargetChoice(testClaudeGlobalKey, tui.TargetClaude, testLabelClaudeGlobal, tui.ScopeGlobal, "/tmp/claude"),
 	}
-	m.selectedTargets = map[string]bool{
-		"codex:global":  true,
-		"claude:global": true,
+	m.SelectedTargets = map[string]bool{
+		testCodexGlobalKey:  true,
+		testClaudeGlobalKey: true,
 	}
 
-	updated, cmd := m.installToSelectedTargets()
-	m = updated.(model)
+	updated, cmd := m.InstallToSelectedTargets()
+	m = asModel(t, updated)
 	if cmd == nil {
 		t.Fatalf("expected first install step command")
 	}
@@ -1581,6 +2295,11 @@ func TestInstallProgressViewShowsCurrentStep(t *testing.T) {
 		"Running",
 		"Skill agent-rules/go-project-rules",
 		"Target Codex global",
+		"Queue",
+		"running",
+		"pending",
+		testQualifiedGoRules,
+		"mattpocock/engineering_tdd",
 		"[",
 		"]",
 	} {
@@ -1588,16 +2307,30 @@ func TestInstallProgressViewShowsCurrentStep(t *testing.T) {
 			t.Fatalf("expected install progress view to contain %q, got:\n%s", want, view)
 		}
 	}
+
+	updated, _ = m.Update(tui.InstallStepDoneMsg{Output: "Installed one\n"})
+	m = asModel(t, updated)
+	view = stripANSI(m.View())
+	for _, want := range []string{
+		"done",
+		"running",
+		"Installing 2/4",
+		"Target Claude global",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected updated queue progress to contain %q, got:\n%s", want, view)
+		}
+	}
 }
 
 func TestGenericBusyViewShowsWorkingPanel(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.busy = true
-	m.viewMode = viewSources
-	m.status = "Syncing sources..."
-	m.width = 120
-	m.height = 30
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.Busy = true
+	m.ViewMode = tui.ViewSources
+	m.Status = "Syncing sources..."
+	m.Width = 120
+	m.Height = 30
 
 	view := stripANSI(m.View())
 	for _, want := range []string{
@@ -1612,35 +2345,35 @@ func TestGenericBusyViewShowsWorkingPanel(t *testing.T) {
 }
 
 func TestInstallProgressStopsOnFailedStep(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.width = 120
-	m.height = 32
-	m.selected = map[string]bool{
-		"agent-rules/go-project-rules": true,
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.Width = 120
+	m.Height = 32
+	m.Selected = map[string]bool{
+		testQualifiedGoRules: true,
 	}
-	m.targetChoices = []InstallTargetChoice{
-		{Key: "codex:global", Target: "codex", Label: "Codex global", Scope: "global", Status: "supported", Path: "/tmp/codex", Supported: true},
-		{Key: "claude:global", Target: "claude", Label: "Claude global", Scope: "global", Status: "supported", Path: "/tmp/claude", Supported: true},
+	m.TargetChoices = []tui.InstallTargetChoice{
+		testTargetChoice(testCodexGlobalKey, tui.TargetCodex, testLabelCodexGlobal, tui.ScopeGlobal, "/tmp/codex"),
+		testTargetChoice(testClaudeGlobalKey, tui.TargetClaude, testLabelClaudeGlobal, tui.ScopeGlobal, "/tmp/claude"),
 	}
-	m.selectedTargets = map[string]bool{
-		"codex:global":  true,
-		"claude:global": true,
+	m.SelectedTargets = map[string]bool{
+		testCodexGlobalKey:  true,
+		testClaudeGlobalKey: true,
 	}
 
-	updated, _ := m.installToSelectedTargets()
-	m = updated.(model)
-	updated, _ = m.Update(installStepDoneMsg{
-		output: "permission denied\n",
-		err:    fmt.Errorf("exit status 1"),
+	updated, _ := m.InstallToSelectedTargets()
+	m = asModel(t, updated)
+	updated, _ = m.Update(tui.InstallStepDoneMsg{
+		Output: "permission denied\n",
+		Err:    errors.New("exit status 1"),
 	})
-	m = updated.(model)
+	m = asModel(t, updated)
 
-	if m.busy {
+	if m.Busy {
 		t.Fatalf("expected install failure to stop busy state")
 	}
-	if !m.installProgress.Failed {
-		t.Fatalf("expected failed progress state, got %#v", m.installProgress)
+	if !m.InstallProgress.Failed {
+		t.Fatalf("expected failed progress state, got %#v", m.InstallProgress)
 	}
 	view := stripANSI(m.View())
 	for _, want := range []string{
@@ -1657,122 +2390,125 @@ func TestInstallProgressStopsOnFailedStep(t *testing.T) {
 }
 
 func TestInstallProgressFailureCanReturnToTargets(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.viewMode = viewTargets
-	m.targetPurpose = "install"
-	m.width = 120
-	m.height = 32
-	m.selected = map[string]bool{
-		"agent-rules/go-project-rules": true,
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewTargets
+	m.TargetPurpose = tui.TargetPurposeInstall
+	m.Width = 120
+	m.Height = 32
+	m.Selected = map[string]bool{
+		testQualifiedGoRules: true,
 	}
-	m.targetChoices = []InstallTargetChoice{
-		{Key: "codex:global", Target: "codex", Label: "Codex global", Scope: "global", Status: "supported", Path: "/tmp/codex", Supported: true},
+	m.TargetChoices = []tui.InstallTargetChoice{
+		testTargetChoice(testCodexGlobalKey, tui.TargetCodex, testLabelCodexGlobal, tui.ScopeGlobal, "/tmp/codex"),
 	}
-	m.selectedTargets = map[string]bool{
-		"codex:global": true,
+	m.SelectedTargets = map[string]bool{
+		testCodexGlobalKey: true,
 	}
 
-	updated, _ := m.installToSelectedTargets()
-	m = updated.(model)
-	updated, _ = m.Update(installStepDoneMsg{output: "permission denied\n", err: fmt.Errorf("exit status 1")})
-	m = updated.(model)
+	updated, _ := m.InstallToSelectedTargets()
+	m = asModel(t, updated)
+	updated, _ = m.Update(tui.InstallStepDoneMsg{Output: "permission denied\n", Err: errors.New("exit status 1")})
+	m = asModel(t, updated)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = updated.(model)
+	m = asModel(t, updated)
 
-	if m.installProgress.Failed || m.installProgress.Total != 0 {
-		t.Fatalf("expected failed install progress to clear, got %#v", m.installProgress)
+	if m.InstallProgress.Failed || m.InstallProgress.Total != 0 {
+		t.Fatalf("expected failed install progress to clear, got %#v", m.InstallProgress)
 	}
 	view := stripANSI(m.View())
-	if !strings.Contains(view, "Install targets") || strings.Contains(view, "Install failed") {
+	if !strings.Contains(view, "Install agents") || strings.Contains(view, "Install failed") {
 		t.Fatalf("expected enter to return to target picker, got:\n%s", view)
 	}
 }
 
 func TestInstallResultCanReturnToTargetsOrInstalled(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.viewMode = viewInstallResult
-	m.status = "Install complete."
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewInstallResult
+	m.Status = "Install complete."
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
-	m = updated.(model)
-	if m.viewMode != viewTargets {
-		t.Fatalf("expected t to return to targets, got %q", m.viewMode)
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewTargets {
+		t.Fatalf("expected t to return to targets, got %q", m.ViewMode)
 	}
 
-	m.viewMode = viewInstallResult
+	m.ViewMode = tui.ViewInstallResult
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = updated.(model)
-	if m.viewMode != viewInstalled {
-		t.Fatalf("expected enter to return to installed, got %q", m.viewMode)
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewInstalled {
+		t.Fatalf("expected enter to return to installed, got %q", m.ViewMode)
 	}
 }
 
 func TestTargetSelectionOnlyTogglesSupportedTargets(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.targetChoices = []InstallTargetChoice{
-		{Key: "cursor", Label: "Cursor", Supported: false},
-		{Key: "claude:global", Label: "Claude global", Target: "claude", Scope: "global", Supported: true},
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.TargetChoices = []tui.InstallTargetChoice{
+		{Key: testTargetCursor, Label: testLabelCursor, Supported: false},
+		{
+			Key: testClaudeGlobalKey, Label: testLabelClaudeGlobal,
+			Target: tui.TargetClaude, Scope: tui.ScopeGlobal, Supported: true,
+		},
 	}
-	m.selectedTargets = map[string]bool{}
-	m.targetCursor = 0
+	m.SelectedTargets = map[string]bool{}
+	m.TargetCursor = 0
 
-	m.toggleCurrentTarget()
-	if m.selectedTargets["cursor"] {
+	m.ToggleCurrentTarget()
+	if m.SelectedTargets[testTargetCursor] {
 		t.Fatalf("planned targets should not be selectable")
 	}
 
-	m.targetCursor = 1
-	m.toggleCurrentTarget()
-	if !m.selectedTargets["claude:global"] {
+	m.TargetCursor = 1
+	m.ToggleCurrentTarget()
+	if !m.SelectedTargets[testClaudeGlobalKey] {
 		t.Fatalf("supported target should be selectable")
 	}
 }
 
 func TestTargetChoicesShowSupportedBeforePlanned(t *testing.T) {
-	m := initialModel(".")
-	choices := m.buildTargetChoices([]Target{
-		{ID: "cursor", Label: "Cursor", Status: "planned", Adapter: "planned", Description: "Planned"},
-		{ID: "gemini", Label: "Gemini", Status: "supported", Adapter: "skill-dir", Description: "Gemini skills"},
-		{ID: "copilot", Label: "Copilot", Status: "planned", Adapter: "planned", Description: "Planned"},
-		{ID: "codex", Label: "Codex", Status: "supported", Adapter: "skill-dir", Description: "Codex skills"},
+	m := tui.InitialModel(".")
+	choices := m.BuildTargetChoices([]tui.Target{
+		testPlannedTarget(testTargetCursor, testLabelCursor),
+		testSupportedTarget(tui.TargetGemini, tui.LabelGemini, testGeminiSkillsDesc),
+		{ID: "copilot", Label: "Copilot", Status: testStatusPlanned, Adapter: testStatusPlanned, Description: testDescPlanned},
+		testSupportedTarget(tui.TargetCodex, tui.LabelCodex, testCodexSkillsDesc),
 	})
 
-	got := []string{}
+	got := make([]string, 0, len(choices))
 	for _, choice := range choices {
 		got = append(got, choice.Key)
 	}
-	wantPrefix := []string{"gemini:global", "gemini:project", "codex:global", "codex:project"}
+	wantPrefix := []string{"gemini:global", "gemini:project", testCodexGlobalKey, testCodexProjectKey}
 	if strings.Join(got[:len(wantPrefix)], " ") != strings.Join(wantPrefix, " ") {
 		t.Fatalf("expected supported choices first, got %#v", got)
 	}
-	if got[len(got)-2] != "cursor" || got[len(got)-1] != "copilot" {
+	if got[len(got)-2] != testTargetCursor || got[len(got)-1] != "copilot" {
 		t.Fatalf("expected planned choices last, got %#v", got)
 	}
 }
 
 func TestTargetSelectionScrollsToKeepCursorVisible(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.width = 120
-	m.height = 24
-	m.viewMode = viewTargets
-	m.selectedTargets = map[string]bool{}
-	m.targetChoices = []InstallTargetChoice{
-		{Key: "agent-00", Label: "Agent 00", Status: "supported", Description: "Agent 00 skills", Supported: true},
-		{Key: "agent-01", Label: "Agent 01", Status: "supported", Description: "Agent 01 skills", Supported: true},
-		{Key: "agent-02", Label: "Agent 02", Status: "supported", Description: "Agent 02 skills", Supported: true},
-		{Key: "agent-03", Label: "Agent 03", Status: "supported", Description: "Agent 03 skills", Supported: true},
-		{Key: "agent-04", Label: "Agent 04", Status: "supported", Description: "Agent 04 skills", Supported: true},
-		{Key: "agent-05", Label: "Agent 05", Status: "supported", Description: "Agent 05 skills", Supported: true},
-		{Key: "agent-06", Label: "Agent 06", Status: "supported", Description: "Agent 06 skills", Supported: true},
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.Width = 120
+	m.Height = 24
+	m.ViewMode = tui.ViewTargets
+	m.SelectedTargets = map[string]bool{}
+	m.TargetChoices = []tui.InstallTargetChoice{
+		{Key: "agent-00", Label: "Agent 00", Status: testStatusSupported, Description: "Agent 00 skills", Supported: true},
+		{Key: "agent-01", Label: "Agent 01", Status: testStatusSupported, Description: "Agent 01 skills", Supported: true},
+		{Key: "agent-02", Label: "Agent 02", Status: testStatusSupported, Description: "Agent 02 skills", Supported: true},
+		{Key: "agent-03", Label: "Agent 03", Status: testStatusSupported, Description: "Agent 03 skills", Supported: true},
+		{Key: "agent-04", Label: "Agent 04", Status: testStatusSupported, Description: "Agent 04 skills", Supported: true},
+		{Key: "agent-05", Label: "Agent 05", Status: testStatusSupported, Description: "Agent 05 skills", Supported: true},
+		{Key: "agent-06", Label: "Agent 06", Status: testStatusSupported, Description: "Agent 06 skills", Supported: true},
 	}
 
 	for i := 0; i < 5; i++ {
 		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
-		m = updated.(model)
+		m = asModel(t, updated)
 	}
 
 	view := stripANSI(m.View())
@@ -1785,120 +2521,110 @@ func TestTargetSelectionScrollsToKeepCursorVisible(t *testing.T) {
 }
 
 func TestSkillVisibleCountLeavesRoomForMultilineCards(t *testing.T) {
-	m := initialModel(".")
-	m.height = 30
+	m := tui.InitialModel(".")
+	m.Height = 30
 
-	if got := m.visibleCount(); got != 3 {
+	if got := m.VisibleCount(); got != 3 {
 		t.Fatalf("expected 3 visible skill cards at height 30, got %d", got)
 	}
 }
 
 func TestCustomSourceInputModeCapturesText(t *testing.T) {
-	m := initialModel(".")
-	m.loading = false
-	m.viewMode = viewSources
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewSources
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
-	m = updated.(model)
-	if m.viewMode != viewAddSource {
-		t.Fatalf("expected add source mode, got %q", m.viewMode)
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewAddSource {
+		t.Fatalf("expected add source mode, got %q", m.ViewMode)
 	}
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("../agent-rules")})
-	m = updated.(model)
-	if m.sourceInput != "../agent-rules" {
-		t.Fatalf("expected source input to be captured, got %q", m.sourceInput)
+	m = asModel(t, updated)
+	if m.SourceInput != "../agent-rules" {
+		t.Fatalf("expected source input to be captured, got %q", m.SourceInput)
 	}
 }
 
 func TestInstallTargetPathUsesProjectScope(t *testing.T) {
-	m := initialModel(".")
-	m.installScope = "project"
-	m.projectDir = "/tmp/example-project"
+	m := tui.InitialModel(".")
+	m.InstallScope = tui.ScopeProject
+	m.ProjectDir = "/tmp/example-project"
 
 	want := filepath.Join("/tmp/example-project", ".agents", "skills")
-	if got := m.installTargetPath(); got != want {
+	if got := m.InstallTargetPath(); got != want {
 		t.Fatalf("expected %q, got %q", want, got)
 	}
 }
 
 func TestInstallTargetPathUsesLegacyGlobalEnv(t *testing.T) {
 	t.Setenv("AGENT_SKILLS_DIR", "/tmp/legacy-skills")
-	m := initialModel(".")
-	m.installScope = "global"
+	m := tui.InitialModel(".")
+	m.InstallScope = tui.ScopeGlobal
 
-	if got := m.installTargetPath(); got != "/tmp/legacy-skills" {
+	if got := m.InstallTargetPath(); got != "/tmp/legacy-skills" {
 		t.Fatalf("expected legacy target, got %q", got)
 	}
 }
 
-func TestTargetChoiceUsesLegacyCodexEnv(t *testing.T) {
-	tmp := t.TempDir()
-	skillDir := filepath.Join(tmp, "rules-selector")
-	if err := os.MkdirAll(skillDir, 0o755); err != nil {
-		t.Fatalf("mkdir skill dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("# Skill\n"), 0o644); err != nil {
-		t.Fatalf("write SKILL.md: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(skillDir, ".skillhub.json"), []byte("{}\n"), 0o644); err != nil {
-		t.Fatalf("write metadata: %v", err)
-	}
-	t.Setenv("AGENT_SKILLS_DIR", tmp)
-
-	m := initialModel(".")
-	m.targetStats = map[string]TargetDetection{
-		"codex:global": {Target: "codex", Scope: "global", Path: "/home/me/.agents/skills", Exists: "yes", Skills: "9", Managed: "0"},
-	}
-	choices := m.buildTargetChoices([]Target{
-		{ID: "codex", Label: "Codex", Status: "supported", Adapter: "skill-dir", Description: "Codex skills"},
-	})
-
-	if len(choices) == 0 {
-		t.Fatalf("expected codex target choices")
-	}
-	got := choices[0]
-	if got.Key != "codex:global" {
-		t.Fatalf("expected first choice to be codex global, got %q", got.Key)
-	}
-	if got.Path != tmp || got.Exists != "yes" || got.Skills != "1" || got.Managed != "1" {
-		t.Fatalf("expected legacy codex env stats, got %#v", got)
-	}
-}
-
-func TestInstallArgsUseLegacyCodexEnv(t *testing.T) {
+func TestInstallArgsWithLegacyEnv(t *testing.T) {
 	t.Setenv("AGENT_SKILLS_DIR", "/tmp/legacy-skills")
 
-	args := installArgsForTargetChoice(
-		InstallTargetChoice{Target: "codex", Scope: "global"},
+	args := tui.InstallArgsForTargetChoice(
+		tui.InstallTargetChoice{Target: tui.TargetCodex, Scope: tui.ScopeGlobal},
 		"/tmp/project",
-		[]string{"rules-selector"},
+		[]string{testSkillRulesSelector},
 	)
-	want := []string{"install", "rules-selector"}
+	want := []string{"install", tui.FlagTarget, tui.TargetCodex, tui.FlagScope, tui.ScopeGlobal, testSkillRulesSelector}
 	if strings.Join(args, " ") != strings.Join(want, " ") {
-		t.Fatalf("expected legacy install args %#v, got %#v", want, args)
+		t.Fatalf("expected explicit install args %#v, got %#v", want, args)
 	}
 }
 
-func TestNativeTargetPaths(t *testing.T) {
-	t.Setenv("HOME", "/home/tester")
-	t.Setenv("OPENCODE_CONFIG_DIR", "/tmp/opencode-config")
+func TestInstallStepWithLegacyEnv(t *testing.T) {
+	tmp := t.TempDir()
+	repo := filepath.Join(tmp, "repo")
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	sourceDir := filepath.Join(tmp, "source")
+	legacyDir := filepath.Join(tmp, "legacy-skills")
+	homeDir := filepath.Join(tmp, "home")
+	writeFakeTUIRepo(t, repo)
+	writeTUINestedPathSource(t, configDir, sourceDir)
+	t.Setenv("SKILLHUB_CONFIG_DIR", configDir)
+	t.Setenv("SKILLHUB_CACHE_DIR", cacheDir)
+	t.Setenv("AGENT_SKILLS_DIR", legacyDir)
+	t.Setenv("HOME", homeDir)
 
-	cases := []struct {
-		target string
-		scope  string
-		want   string
-	}{
-		{"claude", "global", filepath.Join("/home/tester", ".claude", "skills")},
-		{"claude", "project", filepath.Join("/tmp/project", ".claude", "skills")},
-		{"gemini", "global", filepath.Join("/home/tester", ".gemini", "skills")},
-		{"gemini", "project", filepath.Join("/tmp/project", ".gemini", "skills")},
-		{"opencode", "global", filepath.Join("/tmp/opencode-config", "skills")},
-		{"opencode", "project", filepath.Join("/tmp/project", ".opencode", "skills")},
+	model := tui.InitialModel(repo)
+	model.Loading = false
+	model.Selected = map[string]bool{"nested/engineering_tdd": true}
+	model.TargetChoices = []tui.InstallTargetChoice{
+		testTargetChoice(testCodexGlobalKey, tui.TargetCodex, testLabelCodexGlobal, tui.ScopeGlobal, legacyDir),
 	}
-	for _, tc := range cases {
-		if got := targetSkillRoot(tc.target, tc.scope, "/tmp/project"); got != tc.want {
-			t.Fatalf("targetSkillRoot(%q, %q) = %q, want %q", tc.target, tc.scope, got, tc.want)
-		}
+	model.SelectedTargets = map[string]bool{testCodexGlobalKey: true}
+
+	updated, cmd := model.InstallToSelectedTargets()
+	if cmd == nil {
+		t.Fatalf("expected install command")
+	}
+	model = asModel(t, updated)
+	batchMsg := cmd()
+	batch, ok := batchMsg.(tea.BatchMsg)
+	if !ok || len(batch) == 0 {
+		t.Fatalf("expected install batch command, got %#v", batchMsg)
+	}
+	msg := batch[0]()
+	updated, _ = model.Update(msg)
+	model = asModel(t, updated)
+	if strings.Contains(model.Status, "failed") {
+		t.Fatalf("install failed: %s", model.Status)
+	}
+	if _, err := os.Stat(filepath.Join(legacyDir, "engineering_tdd", "SKILL.md")); err != nil {
+		t.Fatalf("expected install in AGENT_SKILLS_DIR: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(homeDir, ".agents", "skills", "engineering_tdd")); !os.IsNotExist(err) {
+		t.Fatalf("expected install not to use default home target, stat err=%v", err)
 	}
 }

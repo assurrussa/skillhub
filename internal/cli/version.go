@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
+
+	"github.com/assurrussa/skillhub/internal/core"
 )
 
 var (
@@ -22,13 +25,13 @@ func versionCommand() *cobra.Command {
 		Use:   "version",
 		Short: "Print skillhub version information",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "skillhub %s\n", version)
-			fmt.Fprintf(out, "commit: %s\n", commit)
-			fmt.Fprintf(out, "built: %s\n", built)
-			fmt.Fprintf(out, "repo: %s\n", emptyValue(repoPath))
-			fmt.Fprintf(out, "install_script: %s\n", emptyValue(installScript))
+			_, _ = fmt.Fprintf(out, "skillhub %s\n", version)
+			_, _ = fmt.Fprintf(out, "commit: %s\n", commit)
+			_, _ = fmt.Fprintf(out, "built: %s\n", built)
+			_, _ = fmt.Fprintf(out, "repo: %s\n", emptyValue(repoPath))
+			_, _ = fmt.Fprintf(out, "install_script: %s\n", emptyValue(installScript))
 			return nil
 		},
 	}
@@ -42,7 +45,7 @@ func updateCommand() *cobra.Command {
 		Use:   "update",
 		Short: "Update skillhub from its installed checkout",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			script, err := resolveInstallScript()
 			if err != nil {
 				return err
@@ -53,7 +56,7 @@ func updateCommand() *cobra.Command {
 				scriptArgs = append(scriptArgs, "--bin-dir", binDir)
 			}
 
-			updateCmd := exec.Command("sh", scriptArgs...)
+			updateCmd := exec.CommandContext(context.Background(), "sh", scriptArgs...)
 			updateCmd.Dir = filepath.Dir(script)
 			updateCmd.Env = os.Environ()
 			updateCmd.Stdout = cmd.OutOrStdout()
@@ -68,22 +71,22 @@ func updateCommand() *cobra.Command {
 			}
 
 			out := cmd.OutOrStdout()
-			fmt.Fprintln(out, "Updating managed installed skills...")
+			_, _ = fmt.Fprintln(out, "Updating managed installed skills...")
 			repoRoot := filepath.Dir(script)
-			skillArgs := []string{"update", "--all-supported"}
-			if verbose {
-				skillArgs = append(skillArgs, "--verbose")
+			backend, err := core.NewDefault(repoRoot)
+			if err != nil {
+				return err
 			}
-			if err := runScript(repoRoot, "scripts/installed.sh", skillArgs...); err != nil {
+			summary, err := backend.UpdateInstalled(core.InstalledUpdateOptions{AllSupported: true, Verbose: verbose})
+			_, _ = fmt.Fprint(out, summary.Output)
+			if err != nil {
 				return err
 			}
 
-			fmt.Fprintln(out, "Updating recorded project usage...")
-			usageArgs := []string{"usage", "update", "--projects"}
-			if verbose {
-				usageArgs = append(usageArgs, "--verbose")
-			}
-			return runScript(repoRoot, "scripts/installed.sh", usageArgs...)
+			_, _ = fmt.Fprintln(out, "Updating recorded project usage...")
+			usageSummary, err := backend.UpdateUsage(core.UsageUpdateOptions{Projects: true, Verbose: verbose})
+			_, _ = fmt.Fprint(out, usageSummary.Output)
+			return err
 		},
 	}
 	cmd.Flags().StringVar(&binDir, "bin-dir", "", "install directory for the skillhub command")

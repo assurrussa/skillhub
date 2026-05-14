@@ -2,8 +2,13 @@
 
 CLI and TUI hub for discovering and installing agent skills from registered
 sources. Sources define where skills come from; targets define where skills are
-installed. The Go/Cobra command owns the user-facing interface; the POSIX shell
-scripts remain the portable backend used by the CLI and TUI.
+installed. The Go backend in `internal/core` owns runtime source, catalog,
+install, target, lockfile, restore, usage, and recommendation behavior. The
+Go/Cobra CLI renders public command output from that backend, and the Bubble
+Tea TUI calls it directly.
+
+Runtime and validation paths use the Go CLI/dev commands. `install.sh` remains
+the Unix installer and self-update entrypoint.
 
 ## Why Skillhub
 
@@ -13,6 +18,9 @@ scripts remain the portable backend used by the CLI and TUI.
   When a skill is installed through Skillhub from a source, metadata and usage
   registry entries let Skillhub update that exact global, local project, or
   custom-directory install later.
+- Commit portable `skills.lock.toml` files for project-scope installs and
+  restore missing or changed project skills without mutating user source
+  configuration.
 
 ## Install
 
@@ -58,7 +66,7 @@ PATH directory such as `/usr/local/bin`; that directory must be writable.
 You can also run it directly from a checkout:
 
 ```sh
-sh bin/skillhub skills list
+go run ./cmd/skillhub skills list
 ```
 
 Open the interactive selector:
@@ -160,12 +168,17 @@ skillhub installed usage agent-rules/go-project-rules --tsv
 skillhub installed usage update --projects
 skillhub installed usage update --projects rules-selector -v
 skillhub installed usage update --projects --target codex --project /path/to/project agent-rules/go-project-rules
+skillhub restore --project /path/to/project
+skillhub restore --check --project /path/to/project
+skillhub restore --check --project /path/to/project --tsv
 skillhub recommend
 skillhub recommend --project /path/to/project
 skillhub recommend --project /path/to/project --tsv
 skillhub skills list
 skillhub skills search go
 skillhub skills install rules-selector
+skillhub skills restore --project /path/to/project
+skillhub add rules-selector
 skillhub skills install rules-selector --target codex --scope project
 skillhub skills install rules-selector --target claude --scope global
 skillhub skills install rules-selector --target gemini --scope project
@@ -185,8 +198,12 @@ Short aliases are also supported:
 skillhub list
 skillhub search go
 skillhub install rules-selector
+skillhub add rules-selector
 skillhub install --all
 ```
+
+`skillhub add <skill>` is a top-level alias for `skillhub install <skill>`.
+The existing `install` command remains supported.
 
 In the TUI:
 
@@ -201,13 +218,13 @@ a         select all visible skills
 c         clear selection
 d         open recommended source presets
 n         add custom source path or git URL
-t         choose install targets
-i         choose targets for selected skills
+t         open target paths
+i         install selected skills
 u         update highlighted install or usage entry
 U         update all visible project usage entries
 x         uninstall highlighted managed skill
 s         sync sources
-r         reload catalog
+r         reload current section, or restore project lockfile in Update
 ?         help
 q         quit
 ```
@@ -216,10 +233,11 @@ The TUI opens as an installed-first dashboard with sections for installed
 skills, catalog skills, managed usage, sources, targets, and update commands.
 The Skills section keeps the readable category tree and green `[✓]` selection
 marker, and shows compact installed badges for managed skills that are already
-present in any target. Press `i` after selecting skills to choose one or more
-supported assistants, then press `enter` to install to all selected targets.
-During install the TUI runs one skill-target step at a time and shows the
-current step, target, progress bar, and last result line.
+present in any target. Press `i` after selecting skills to open the install
+wizard: choose `Project` or `User` scope, select one or more supported
+assistants, review the target paths, then confirm. During install the TUI runs
+one skill-target step at a time and shows the current step, queue state,
+spinner, progress bar, and last result line.
 
 The Installed section lists managed and unmanaged `SKILL.md` directories grouped
 by target/scope. Press `u` to update managed skills for the highlighted
@@ -237,8 +255,9 @@ entry, and source sync. The Skills screen uses the local source cache and a
 10-minute git-source TTL, so opening the catalog does not block on network on
 every visit; press `s` in Sources when you want an immediate refresh. The
 Update section intentionally does not run self-update from inside the TUI; it
-shows the exact CLI commands for `skillhub update`, cascade update, and managed
-skill update.
+shows project lockfile status, restores the current project lockfile with `r`,
+and shows the exact CLI commands for `skillhub update`, cascade update, managed
+skill update, and restore.
 
 Update `skillhub` itself without reinstalling skills:
 
@@ -332,6 +351,34 @@ custom directory rows use `project_path=-`. It is not an import index for old
 manual installs. Project skill content such as `SKILL.md`, references, and docs
 can be committed normally; Skillhub adds a small `.gitignore` block for old
 `.skillhub.json` files and temporary update directories.
+
+Project-scope installs also write a portable project lockfile:
+
+```text
+<project>/skills.lock.toml
+```
+
+The lockfile stores relative project paths such as `project_path = "."`,
+`target_root = ".agents/skills"`, and
+`installed_path = ".agents/skills/<skill>"`. It records the source location,
+ref, catalog path, target, content hash, and timestamps needed to restore the
+same project skills on another machine. Global and custom-directory installs do
+not create a project lockfile.
+
+Restore project skills from the lockfile:
+
+```sh
+skillhub restore --project /path/to/project
+skillhub restore --check --project /path/to/project
+skillhub restore --check --project /path/to/project --tsv
+skillhub skills restore --project /path/to/project
+```
+
+Restore uses the source location, type, ref, and catalog recorded in
+`skills.lock.toml` directly and does not add sources to user config. It installs
+missing entries, refreshes changed entries, skips unavailable sources or missing
+catalog entries with a summary, and never deletes extra project skills. If the
+last project-scope skill is uninstalled, Skillhub removes the empty lockfile.
 
 Inspect installed skills without modifying them:
 
@@ -433,10 +480,18 @@ The current implementation is intentionally conservative. Useful next slices:
   saved filters, and dry-run summaries across recorded project installs.
 - Add real target adapters for more assistants after their current on-disk
   formats and supported paths are verified.
-- Improve `skillhub recommend` with deeper language/framework detection and
+- Add more concrete `skillhub recommend` language/framework providers and
   source-specific heuristics while keeping the no-install recommendation flow.
 
 ## Validation
+
+```sh
+go run ./cmd/skillhub-dev verify
+go run ./cmd/skillhub-dev smoke-temp
+go run ./cmd/skillhub-dev tui-temp
+```
+
+Unix convenience wrappers:
 
 ```sh
 make verify
@@ -444,10 +499,12 @@ make smoke-temp
 make tui-temp
 ```
 
-Raw commands:
+Focused raw checks:
 
 ```sh
-sh scripts/check.sh
-SKILLHUB_CONFIG_DIR=/tmp/skillhub-config sh bin/skillhub sources defaults add agent-rules
-SKILLHUB_CONFIG_DIR=/tmp/skillhub-config SKILLHUB_AGENT_RULES_PATH=../agent-rules sh bin/skillhub skills list
+go test ./...
+go vet ./...
+git diff --check
+SKILLHUB_CONFIG_DIR=/tmp/skillhub-config go run ./cmd/skillhub sources defaults add agent-rules
+SKILLHUB_CONFIG_DIR=/tmp/skillhub-config SKILLHUB_AGENT_RULES_PATH=../agent-rules go run ./cmd/skillhub skills list
 ```

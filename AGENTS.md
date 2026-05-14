@@ -2,17 +2,19 @@
 
 ## Scope
 
-This repository owns the `skillhub` CLI, TUI, shell backend, installer, source
+This repository owns the `skillhub` CLI, TUI, Go backend, installer, source
 presets, and target registry. It must stay neutral: no active skill source is
 required at runtime, and user-added sources live outside the checkout.
 
 ## Source Of Truth
 
 - User request and this `AGENTS.md` override general rules.
-- Shell scripts are the portable backend. Keep source, install, target, and
-  metadata behavior in `scripts/*.sh` and `scripts/lib.sh` first.
-- The Go/Cobra CLI and Bubble Tea TUI should delegate to the shell backend
-  rather than reimplementing persistence or install semantics.
+- `internal/core` is the source of truth for source, catalog, install, target,
+  metadata, lockfile, restore, usage, and recommendation behavior.
+- The Go/Cobra CLI and Bubble Tea TUI should call `internal/core` directly and
+  must not shell out for runtime behavior.
+- `cmd/skillhub-dev` owns cross-platform development validation and temp smoke
+  workflows. Makefile targets are Unix convenience wrappers around it.
 - `README.md` documents the public CLI contract. Update it when commands,
   flags, targets, config files, or install behavior changes.
 
@@ -21,8 +23,9 @@ required at runtime, and user-added sources live outside the checkout.
 - `internal/cli` owns user-facing Cobra command wiring, flag parsing, and repo
   discovery.
 - `internal/tui` owns interactive selection and display state only. It should
-  call the same scripts as the CLI for source, target, and install operations.
-- `scripts/lib.sh` owns shared POSIX shell helpers and validation.
+  call typed `internal/core` services for source, target, install, and registry
+  operations instead of parsing CLI stdout.
+- `internal/core` owns shared backend helpers and validation.
 - `defaults/sources.tsv` contains recommended presets only. It must not become
   an active registry.
 - Active sources are user config only:
@@ -67,7 +70,7 @@ make tui-temp
 Equivalent raw checks:
 
 ```sh
-sh scripts/check.sh
-go vet ./...
-git diff --check
+go run ./cmd/skillhub-dev verify
+go run ./cmd/skillhub-dev smoke-temp
+go run ./cmd/skillhub-dev tui-temp
 ```

@@ -77,6 +77,12 @@ const (
 	testTriggerGrill         = "grill"
 	testTriggerGoGolang      = "go,golang"
 	testCategoryProductivity = "productivity"
+	testSourceTypeGit        = "git"
+	testSourceRefMain        = "main"
+	testCatalogSkillsPath    = "catalog/skills.tsv"
+	testQueueStateRunning    = "running"
+	testQueueStatePending    = "pending"
+	testPermissionDeniedLine = "permission denied\n"
 	testTargetCursor         = "cursor"
 	testLabelOpenCode        = "OpenCode"
 	testGeminiSkillsDesc     = "Gemini skills"
@@ -486,6 +492,162 @@ func TestViewShowsTaskOrientedSkillList(t *testing.T) {
 	}
 }
 
+func TestSourcesViewShowsStatusSummaryAndCursor(t *testing.T) {
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewSources
+	m.Width = 120
+	m.Height = 30
+	m.Sources = []tui.SourcePreset{
+		{
+			Name:         testSourceAgentRules,
+			Type:         testSourceTypeGit,
+			Status:       "fresh",
+			LastSyncedAt: "2026-05-15T10:00:00Z",
+			CachePath:    "/tmp/cache/sources/agent-rules",
+			Ref:          testSourceRefMain,
+			Catalog:      testCatalogSkillsPath,
+			Location:     "git@example.com:agent-rules.git",
+			Message:      "cache is fresh",
+		},
+		{
+			Name:     testSourceMattPocock,
+			Type:     testSourceTypeGit,
+			Status:   core.SourceStatusMissing,
+			Ref:      testSourceRefMain,
+			Catalog:  testCatalogSkillsPath,
+			Location: "git@example.com:mattpocock.git",
+			Message:  "cache missing. Run: skillhub sources sync mattpocock",
+		},
+	}
+	m.SourceCursor = 1
+
+	view := stripANSI(m.View())
+	for _, want := range []string{
+		"Sources: 2",
+		"fresh: 1",
+		"missing: 1",
+		"agent-rules [fresh]",
+		"last sync: 2026-05-15T10:00:00Z",
+		"mattpocock [missing]",
+		"skillhub sources sync mattpocock",
+		"u update source",
+		"U/s update all",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected sources view to contain %q, got:\n%s", want, view)
+		}
+	}
+}
+
+func TestSourcesCursorMovesWithJK(t *testing.T) {
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewSources
+	m.Sources = []tui.SourcePreset{
+		{Name: testSourceAgentRules},
+		{Name: testSourceMattPocock},
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m = asModel(t, updated)
+	if m.SourceCursor != 1 {
+		t.Fatalf("expected source cursor to move down, got %d", m.SourceCursor)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	m = asModel(t, updated)
+	if m.SourceCursor != 0 {
+		t.Fatalf("expected source cursor to move up, got %d", m.SourceCursor)
+	}
+}
+
+func TestSourcesUpdateCurrentStartsOneStepProgress(t *testing.T) {
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewSources
+	m.Sources = []tui.SourcePreset{
+		{Name: testSourceAgentRules},
+		{Name: testSourceMattPocock},
+	}
+	m.SourceCursor = 1
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+	m = asModel(t, updated)
+	if cmd == nil || !m.Busy || m.SourceProgress.Total != 1 {
+		t.Fatalf("expected one-step source update progress, busy=%v progress=%#v cmd=%v", m.Busy, m.SourceProgress, cmd)
+	}
+	if m.SourceProgress.Items[0].Name != testSourceMattPocock {
+		t.Fatalf("expected highlighted source update, got %#v", m.SourceProgress)
+	}
+}
+
+func TestSourcesUpdateAllStartsProgress(t *testing.T) {
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewSources
+	m.Sources = []tui.SourcePreset{
+		{Name: testSourceAgentRules},
+		{Name: testSourceMattPocock},
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("U")})
+	m = asModel(t, updated)
+	if cmd == nil || !m.Busy || m.SourceProgress.Total != 2 {
+		t.Fatalf("expected all-source update progress, busy=%v progress=%#v cmd=%v", m.Busy, m.SourceProgress, cmd)
+	}
+	view := stripANSI(m.View())
+	for _, want := range []string{
+		"Source update progress",
+		"Updating 1/2",
+		"Queue",
+		testQueueStateRunning,
+		testQueueStatePending,
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected source update progress view to contain %q, got:\n%s", want, view)
+		}
+	}
+}
+
+func TestSourceProgressAdvancesAndStopsOnFailure(t *testing.T) {
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.ViewMode = tui.ViewSources
+	m.Sources = []tui.SourcePreset{
+		{Name: testSourceAgentRules},
+		{Name: testSourceMattPocock},
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	m = asModel(t, updated)
+	updated, _ = m.Update(tui.SourceSyncStepDoneMsg{Output: "Synced agent-rules\n"})
+	m = asModel(t, updated)
+	if m.SourceProgress.Completed != 1 || m.SourceProgress.Current != 2 || !m.Busy {
+		t.Fatalf("expected source progress 2/2 after first step, busy=%v progress=%#v", m.Busy, m.SourceProgress)
+	}
+
+	updated, _ = m.Update(tui.SourceSyncStepDoneMsg{Output: testPermissionDeniedLine, Err: errors.New("exit status 1")})
+	m = asModel(t, updated)
+	if m.Busy || !m.SourceProgress.Failed {
+		t.Fatalf("expected failed source progress to stop busy state, busy=%v progress=%#v", m.Busy, m.SourceProgress)
+	}
+	view := stripANSI(m.View())
+	for _, want := range []string{"Source update failed", "Updating 2/2", "permission denied", "exit status 1"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected failed source progress view to contain %q, got:\n%s", want, view)
+		}
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = asModel(t, updated)
+	if m.SourceProgress.Failed || m.SourceProgress.Total != 0 || m.ViewMode != tui.ViewSources {
+		t.Fatalf("expected failed source progress to clear in sources, got view=%q progress=%#v", m.ViewMode, m.SourceProgress)
+	}
+	if !strings.Contains(m.Status, "exit status 1") {
+		t.Fatalf("expected failure message to remain in status, got %q", m.Status)
+	}
+}
+
 func TestSkillsScreenGroupsBySourceThenCategory(t *testing.T) {
 	m := tui.InitialModel(".")
 	m.Loading = false
@@ -677,7 +839,7 @@ func TestParseInstalledUsageTSV(t *testing.T) {
 		strings.Join([]string{
 			testSourceAgentRules, testSkillRulesSelector, tui.TargetCodex, tui.ScopeProject, testProjectPath,
 			testProjectSkillsRoot, testProjectRulesPath,
-			"main", "git@example.com:rules.git", "catalog/skills.tsv", testHashABC,
+			testSourceRefMain, "git@example.com:rules.git", testCatalogSkillsPath, testHashABC,
 			testTimestampInstalled, testTimestampUsage,
 		}, "\t"),
 		"",
@@ -1028,7 +1190,7 @@ func TestUsageBulkUpdateArgsGroupsVisibleProjectRows(t *testing.T) {
 	}
 }
 
-func TestInstalledScreenGroupsRowsByTargetScope(t *testing.T) {
+func TestInstalledScreenGroupsLocationsBySkill(t *testing.T) {
 	m := tui.InitialModel(".")
 	m.Loading = false
 	m.Width = 120
@@ -1058,24 +1220,53 @@ func TestInstalledScreenGroupsRowsByTargetScope(t *testing.T) {
 		"Skills: 3",
 		"Projects: 2",
 		"Managed: 3",
-		"Showing 1-4/4",
+		"Showing 1-3/3",
 		"[M] managed by Skillhub",
 		"[ ] unmanaged: read-only in TUI",
-		"Global",
-		"[M] rules-selector",
-		"source: agent-rules",
-		"Projects",
-		"Project /tmp/project",
+		"agent-rules/rules-selector",
+		"2 locations",
+		"targets: Codex global, Gemini project",
 		"[ ] manual-skill",
 		"unmanaged",
-		"Project /tmp/other-project",
-		"registry",
-		"Custom directories",
-		testSkillsRoot,
+		"targets: Claude project",
+		"agent-rules/docs-project-rules",
+		"targets: directory custom",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected installed screen to contain %q, got:\n%s", want, view)
 		}
+	}
+}
+
+func TestInstalledReloadClampsCursorToGroupedSummaries(t *testing.T) {
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.Width = 120
+	m.Height = 40
+	m.ViewMode = tui.ViewInstalled
+	m.InstalledCursor = 2
+	m.InstalledOffset = 2
+
+	updated, _ := m.Update(tui.InstalledLoadedMsg{Rows: []tui.InstalledSkill{
+		testManagedInstalled("/tmp/codex/rules-selector"),
+		{
+			Target: tui.TargetClaude, Scope: tui.ScopeGlobal, Skill: testSkillRulesSelector,
+			Managed: tui.ManagedYes, Source: testSourceAgentRules, Path: "/tmp/claude/rules-selector",
+		},
+		{
+			Target: tui.TargetGemini, Scope: tui.ScopeGlobal, Skill: testSkillRulesSelector,
+			Managed: tui.ManagedYes, Source: testSourceAgentRules, Path: "/tmp/gemini/rules-selector",
+		},
+	}})
+	m = asModel(t, updated)
+	if m.InstalledCursor != 0 || m.InstalledOffset != 0 {
+		t.Fatalf("expected reload to clamp cursor and offset to grouped summary, cursor=%d offset=%d", m.InstalledCursor, m.InstalledOffset)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewInstalledDetails {
+		t.Fatalf("expected clamped installed selection to open details, got view=%q status=%q", m.ViewMode, m.Status)
 	}
 }
 
@@ -1282,6 +1473,16 @@ func TestInstalledUpdateAndUninstallArgs(t *testing.T) {
 	if got := tui.InstalledUninstallArgsForRow(directoryRow, project); strings.Join(got, " ") != strings.Join(directoryWant, " ") {
 		t.Fatalf("expected directory uninstall args %#v, got %#v", directoryWant, got)
 	}
+
+	registryOnlyRow := tui.InstalledSkill{
+		Target: tui.TargetClaude, Scope: tui.ScopeGlobal, Skill: "productivity_grill-me",
+		Managed: tui.ManagedYes, Path: "/tmp/home/.claude/skills/productivity_grill-me",
+		InstalledPath: "/tmp/home/.claude/skills/productivity_grill-me", RegistryOnly: true,
+	}
+	registryOnlyWant := "uninstall productivity_grill-me --target claude --scope global"
+	if got := tui.InstalledUninstallArgsForRow(registryOnlyRow, project); strings.Join(got, " ") != registryOnlyWant {
+		t.Fatalf("expected registry-only uninstall args %q, got %q", registryOnlyWant, strings.Join(got, " "))
+	}
 }
 
 func TestInstalledArgsWithLegacyEnv(t *testing.T) {
@@ -1303,13 +1504,14 @@ func TestInstalledArgsWithLegacyEnv(t *testing.T) {
 
 func TestParseActiveSourcesTSV(t *testing.T) {
 	input := "name\ttype\tlocation\tref\tcatalog\n" +
-		"agent-rules\tgit\tgit@github.com:assurrussa/agent-rules.git\tmain\tcatalog/skills.tsv\n"
+		testSourceAgentRules + "\t" + testSourceTypeGit + "\tgit@github.com:assurrussa/agent-rules.git\t" +
+		testSourceRefMain + "\t" + testCatalogSkillsPath + "\n"
 
 	sources, err := tui.ParseSourcesTSV(input)
 	if err != nil {
 		t.Fatalf("tui.ParseSourcesTSV returned error: %v", err)
 	}
-	if len(sources) != 1 || sources[0].Name != testSourceAgentRules || sources[0].Catalog != "catalog/skills.tsv" {
+	if len(sources) != 1 || sources[0].Name != testSourceAgentRules || sources[0].Catalog != testCatalogSkillsPath {
 		t.Fatalf("unexpected sources: %#v", sources)
 	}
 }
@@ -1519,7 +1721,9 @@ func TestQuestionMarkOpensHelpOverlay(t *testing.T) {
 		"Help",
 		"1/2/3/4/5",
 		"left/right",
-		"u           update",
+		"u           update highlighted install, usage, or source entry",
+		"U           update visible Usage rows or all Sources",
+		"s           update all Sources",
 		"x           uninstall",
 		"[M]         managed by Skillhub",
 		"[ ]         unmanaged local skill",
@@ -1641,7 +1845,7 @@ func TestLeftRightDoesNotLeaveInstallTargetPicker(t *testing.T) {
 	}
 }
 
-func TestSkillSelectionUsesSoftActiveAndGreenSelectedStyles(t *testing.T) {
+func TestSkillSelectionUsesSoftActiveAndGreenQueueStyles(t *testing.T) {
 	m := tui.InitialModel(".")
 	m.Loading = false
 	m.ViewMode = tui.ViewSkills
@@ -1664,8 +1868,8 @@ func TestSkillSelectionUsesSoftActiveAndGreenSelectedStyles(t *testing.T) {
 	if got := tui.SelectedRowStyle.GetForeground(); got != lipgloss.Color("42") {
 		t.Fatalf("selected row should use green foreground, got %#v", got)
 	}
-	if !strings.Contains(stripANSI(view), "[✓] go-project-rules") {
-		t.Fatalf("selected row should keep an explicit selected marker, got:\n%s", stripANSI(view))
+	if !strings.Contains(stripANSI(view), "[+] go-project-rules") {
+		t.Fatalf("queued row should keep an explicit queue marker, got:\n%s", stripANSI(view))
 	}
 }
 
@@ -1719,6 +1923,11 @@ func TestSkillsListShowsManagedInstalledBadge(t *testing.T) {
 			Target: tui.TargetCodex, Scope: tui.ScopeGlobal, Source: "-", Skill: testSkillGoProjectRules,
 			Managed: "no", Path: "/home/me/.agents/skills/go-project-rules",
 		},
+		{
+			Target: tui.TargetCodex, Scope: tui.ScopeGlobal, Source: testSourceAgentRules, Skill: testSkillGoProjectRules,
+			QualifiedSkill: testQualifiedGoRules, Managed: tui.ManagedYes,
+			Path: "/home/me/.agents/skills/go-project-rules", PathMissing: true,
+		},
 	}
 	m.ApplyFilter()
 
@@ -1732,7 +1941,7 @@ func TestSkillsListShowsManagedInstalledBadge(t *testing.T) {
 		}
 	}
 	if strings.Contains(view, "go-project-rules   installed:") {
-		t.Fatalf("unmanaged installed rows should not create catalog badges, got:\n%s", view)
+		t.Fatalf("unmanaged or missing installed rows should not create catalog badges, got:\n%s", view)
 	}
 }
 
@@ -1821,7 +2030,8 @@ func TestSmallHeightViewKeepsDashboardHeaderVisible(t *testing.T) {
 
 func TestParseDefaultSourcesTSV(t *testing.T) {
 	input := "name\ttype\tlocation\tref\tcatalog\n" +
-		"agent-rules\tgit\tgit@github.com:assurrussa/agent-rules.git\tmain\tcatalog/skills.tsv\n"
+		testSourceAgentRules + "\t" + testSourceTypeGit + "\tgit@github.com:assurrussa/agent-rules.git\t" +
+		testSourceRefMain + "\t" + testCatalogSkillsPath + "\n"
 
 	sources, err := tui.ParseDefaultSourcesTSV(input)
 	if err != nil {
@@ -1830,7 +2040,7 @@ func TestParseDefaultSourcesTSV(t *testing.T) {
 	if len(sources) != 1 {
 		t.Fatalf("expected 1 source, got %d", len(sources))
 	}
-	if sources[0].Name != testSourceAgentRules || sources[0].Type != "git" {
+	if sources[0].Name != testSourceAgentRules || sources[0].Type != testSourceTypeGit {
 		t.Fatalf("unexpected source preset: %#v", sources[0])
 	}
 }
@@ -2296,8 +2506,8 @@ func TestInstallProgressViewShowsCurrentStep(t *testing.T) {
 		"Skill agent-rules/go-project-rules",
 		"Target Codex global",
 		"Queue",
-		"running",
-		"pending",
+		testQueueStateRunning,
+		testQueueStatePending,
 		testQualifiedGoRules,
 		"mattpocock/engineering_tdd",
 		"[",
@@ -2313,7 +2523,7 @@ func TestInstallProgressViewShowsCurrentStep(t *testing.T) {
 	view = stripANSI(m.View())
 	for _, want := range []string{
 		"done",
-		"running",
+		testQueueStateRunning,
 		"Installing 2/4",
 		"Target Claude global",
 	} {
@@ -2364,7 +2574,7 @@ func TestInstallProgressStopsOnFailedStep(t *testing.T) {
 	updated, _ := m.InstallToSelectedTargets()
 	m = asModel(t, updated)
 	updated, _ = m.Update(tui.InstallStepDoneMsg{
-		Output: "permission denied\n",
+		Output: testPermissionDeniedLine,
 		Err:    errors.New("exit status 1"),
 	})
 	m = asModel(t, updated)
@@ -2408,7 +2618,7 @@ func TestInstallProgressFailureCanReturnToTargets(t *testing.T) {
 
 	updated, _ := m.InstallToSelectedTargets()
 	m = asModel(t, updated)
-	updated, _ = m.Update(tui.InstallStepDoneMsg{Output: "permission denied\n", Err: errors.New("exit status 1")})
+	updated, _ = m.Update(tui.InstallStepDoneMsg{Output: testPermissionDeniedLine, Err: errors.New("exit status 1")})
 	m = asModel(t, updated)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = asModel(t, updated)

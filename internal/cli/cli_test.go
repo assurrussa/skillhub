@@ -26,6 +26,7 @@ const (
 	testFlagTSV        = "--tsv"
 	testSubcommandList = "list"
 	testRepoTargetsDir = testCommandTargets
+	testUsageTimestamp = "2026-05-05T00:00:00Z"
 )
 
 func testRepoRoot(t *testing.T) string {
@@ -69,9 +70,41 @@ func installedUsageFixtureRow(source, skill, target, projectPath, sourceLocation
 		sourceLocation,
 		"catalog/skills.tsv",
 		"old",
-		"2026-05-05T00:00:00Z",
-		"2026-05-05T00:00:00Z",
+		testUsageTimestamp,
+		testUsageTimestamp,
 	}, "\t")
+}
+
+func installedUsageRow(source, skill, target, scope, projectPath, targetRoot, installedPath, sourceLocation string) string {
+	return strings.Join([]string{
+		source,
+		skill,
+		target,
+		scope,
+		projectPath,
+		targetRoot,
+		installedPath,
+		"-",
+		sourceLocation,
+		"catalog/skills.tsv",
+		"old",
+		testUsageTimestamp,
+		testUsageTimestamp,
+	}, "\t")
+}
+
+func writeInstalledUsageRows(t *testing.T, configDir string, rows ...string) {
+	t.Helper()
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config: %v", err)
+	}
+	data := core.InstalledUsageHeader + "\n"
+	if len(rows) > 0 {
+		data += strings.Join(rows, "\n") + "\n"
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "installed.tsv"), []byte(data), 0o644); err != nil {
+		t.Fatalf("write installed registry: %v", err)
+	}
 }
 
 func overwriteFile(t *testing.T, path string, data string) {
@@ -659,7 +692,7 @@ func TestSkillsListUsesFreshCachedGitCatalogWithoutSync(t *testing.T) {
 	}
 }
 
-func TestSkillsListRefreshesExpiredGitCatalogAndUpdatesTimestamp(t *testing.T) {
+func TestSkillsListUsesExpiredGitCatalogWithoutSync(t *testing.T) {
 	tmp := t.TempDir()
 	configDir := filepath.Join(tmp, "config")
 	cacheDir := filepath.Join(tmp, "cache")
@@ -684,11 +717,17 @@ func TestSkillsListRefreshesExpiredGitCatalogAndUpdatesTimestamp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("skills list failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "cached\tnew-rules\t") {
-		t.Fatalf("expected refreshed catalog row, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
+	if strings.Contains(stdout, "cached\tnew-rules\t") {
+		t.Fatalf("skills list should not fetch stale sources, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
 	}
-	if got := readSourceSyncedAt(t, cacheDir, "cached"); got <= oldStamp {
-		t.Fatalf("expected sync timestamp to be updated from %d, got %d", oldStamp, got)
+	if !strings.Contains(stdout, "cached\tgo-project-rules\t") {
+		t.Fatalf("expected stale cached catalog row, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+	if !strings.Contains(stderr, "Warning: using stale cache for source cached") {
+		t.Fatalf("expected stale cache warning, got stderr:\n%s", stderr)
+	}
+	if got := readSourceSyncedAt(t, cacheDir, "cached"); got != oldStamp {
+		t.Fatalf("skills list should not update sync timestamp from %d, got %d", oldStamp, got)
 	}
 }
 
@@ -709,6 +748,53 @@ func TestSkillsListUsesStaleCacheWithWarningWhenExpiredRefreshFails(t *testing.T
 	}
 	if !strings.Contains(stdout, "cached\tstale-rules\t") {
 		t.Fatalf("expected stale catalog row, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+	if !strings.Contains(stderr, "Warning: using stale cache for source cached") {
+		t.Fatalf("expected stale cache warning, got stderr:\n%s", stderr)
+	}
+}
+
+func TestSkillsSearchUsesStaleCacheWithoutSync(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	writeTestGitSources(t, configDir, "cached", filepath.Join(tmp, "missing-remote"))
+	writeCachedGitCatalog(t, cacheDir, "cached", "stale-rules")
+	writeSourceSyncedAt(t, cacheDir, "cached", time.Now().Add(-11*time.Minute))
+
+	stdout, stderr, err := runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "skills", "search", "--tsv", "stale")
+	if err != nil {
+		t.Fatalf("skills search should use stale cache: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "cached\tstale-rules\t") {
+		t.Fatalf("expected stale catalog search result, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+	if !strings.Contains(stderr, "Warning: using stale cache for source cached") {
+		t.Fatalf("expected stale cache warning, got stderr:\n%s", stderr)
+	}
+}
+
+func TestInstallUsesStaleCacheWithWarning(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	targetDir := filepath.Join(tmp, "target")
+	writeTestGitSources(t, configDir, "cached", filepath.Join(tmp, "missing-remote"))
+	writeInstallableTestSource(t, filepath.Join(cacheDir, "sources", "cached"), "stale-rules", "v1")
+	writeSourceSyncedAt(t, cacheDir, "cached", time.Now().Add(-11*time.Minute))
+
+	stdout, stderr, err := runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "skills", "install", "cached/stale-rules", "--target", "directory", "--dir", targetDir)
+	if err != nil {
+		t.Fatalf("install should use stale cache: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Installed stale-rules from cached to ") {
+		t.Fatalf("expected install output, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
 	}
 	if !strings.Contains(stderr, "Warning: using stale cache for source cached") {
 		t.Fatalf("expected stale cache warning, got stderr:\n%s", stderr)
@@ -762,6 +848,71 @@ func TestSkillsListMissingGitCacheFailsWithSyncHint(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "Run: skillhub sources sync cached") {
 		t.Fatalf("expected sources sync hint, got stderr:\n%s", stderr)
+	}
+}
+
+func TestSourcesStatusTSVShowsCacheFreshness(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	localSource := filepath.Join(tmp, "local-source")
+	writeTestSourceCatalogWithExtraSkill(t, localSource, "local-rules")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config: %v", err)
+	}
+	sources := core.SourcesHeader + "\n" +
+		"local\tpath\t" + localSource + "\t-\tcatalog/skills.tsv\n" +
+		"fresh\tgit\t" + filepath.Join(tmp, "fresh-remote") + "\tmain\tcatalog/skills.tsv\n" +
+		"stale\tgit\t" + filepath.Join(tmp, "stale-remote") + "\tmain\tcatalog/skills.tsv\n" +
+		"missing\tgit\t" + filepath.Join(tmp, "missing-remote") + "\tmain\tcatalog/skills.tsv\n"
+	if err := os.WriteFile(filepath.Join(configDir, "sources.tsv"), []byte(sources), 0o644); err != nil {
+		t.Fatalf("write sources: %v", err)
+	}
+	writeCachedGitCatalog(t, cacheDir, "fresh", "fresh-rules")
+	writeCachedGitCatalog(t, cacheDir, "stale", "stale-rules")
+	writeSourceSyncedAt(t, cacheDir, "fresh", time.Now())
+	writeSourceSyncedAt(t, cacheDir, "stale", time.Now().Add(-11*time.Minute))
+
+	stdout, stderr, err := runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "sources", "status", "--tsv")
+	if err != nil {
+		t.Fatalf("sources status failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	for _, want := range []string{
+		core.SourceStatusesHeader,
+		"local\tpath\tlocal\t",
+		"fresh\tgit\tfresh\t",
+		"stale\tgit\tstale\t",
+		"missing\tgit\tmissing\t",
+		"Run: skillhub sources sync missing",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("expected sources status TSV to contain %q, got stdout:\n%s", want, stdout)
+		}
+	}
+}
+
+func TestSourcesStatusHumanOutput(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	writeTestGitSources(t, configDir, "cached", filepath.Join(tmp, "missing-remote"))
+	writeCachedGitCatalog(t, cacheDir, "cached", "cached-rules")
+	writeSourceSyncedAt(t, cacheDir, "cached", time.Now())
+
+	stdout, stderr, err := runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "sources", "status")
+	if err != nil {
+		t.Fatalf("sources status failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	for _, want := range []string{"name", "status", "cached", "fresh", "cache is fresh", "ref=main"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("expected sources status output to contain %q, got stdout:\n%s", want, stdout)
+		}
 	}
 }
 
@@ -976,7 +1127,7 @@ func TestSourcesRemoveClearsGitCacheAndSyncState(t *testing.T) {
 	}
 }
 
-func TestSkillsListIgnoresFreshTimestampWhenCachedOriginDiffers(t *testing.T) {
+func TestSkillsListRejectsCacheWhenCachedOriginDiffers(t *testing.T) {
 	tmp := t.TempDir()
 	configDir := filepath.Join(tmp, "config")
 	cacheDir := filepath.Join(tmp, "cache")
@@ -996,14 +1147,15 @@ func TestSkillsListIgnoresFreshTimestampWhenCachedOriginDiffers(t *testing.T) {
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
 	}, "skills", "list", "--tsv")
-	if err != nil {
-		t.Fatalf("skills list failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
-	}
-	if !strings.Contains(stdout, "shared\tnew-rules\t") {
-		t.Fatalf("expected catalog from configured source location, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
+	if err == nil {
+		t.Fatalf("expected origin mismatch to fail, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
 	}
 	if strings.Contains(stdout, "shared\told-rules\t") {
 		t.Fatalf("expected old origin cache not to be used, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+	if !strings.Contains(stderr, "cached git origin for shared does not match configured location") ||
+		!strings.Contains(stderr, "Run: skillhub sources sync shared") {
+		t.Fatalf("expected origin mismatch sync hint, got stderr:\n%s", stderr)
 	}
 }
 
@@ -1035,6 +1187,40 @@ func TestRecommendUsesFreshCachedGitCatalogWithoutSync(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "cached\tgo-project-rules\t") {
 		t.Fatalf("expected cached recommendation, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+}
+
+func TestRecommendUsesStaleCacheWithWarning(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	projectDir := filepath.Join(tmp, "project")
+	writeTestGitSources(t, configDir, "cached", filepath.Join(tmp, "missing-remote"))
+	writeCachedGitCatalog(t, cacheDir, "cached", "")
+	writeSourceSyncedAt(t, cacheDir, "cached", time.Now().Add(-11*time.Minute))
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(projectDir, "go.mod"),
+		[]byte("module example.com/project\n\ngo 1.26.0\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+
+	stdout, stderr, err := runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "recommend", "--project", projectDir, "--tsv")
+	if err != nil {
+		t.Fatalf("recommend should use stale cache: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "cached\tgo-project-rules\t") {
+		t.Fatalf("expected cached recommendation, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+	if !strings.Contains(stderr, "Warning: using stale cache for source cached") {
+		t.Fatalf("expected stale cache warning, got stderr:\n%s", stderr)
 	}
 }
 
@@ -1101,6 +1287,94 @@ func TestNestedGitSourceCanBeAddedListedSearchedAndInstalled(t *testing.T) {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected installed generated skill file %s: %v", path, err)
 		}
+	}
+}
+
+func TestGeneratedGitCacheWorksWhenCachedCheckoutIsMissing(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	sourceDir := filepath.Join(tmp, "nested-source")
+	projectDir := filepath.Join(tmp, "project")
+	targetDir := filepath.Join(tmp, "target")
+	writeNestedSkill(t, sourceDir, "go/go-mod", "Go module guidance", "Go module body")
+	runGit(t, sourceDir, "init")
+	runGit(t, sourceDir, "checkout", "-b", "main")
+	commitGitSource(t, sourceDir, "initial generated skills")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(projectDir, "go.mod"),
+		[]byte("module example.com/project\n\ngo 1.26.0\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+
+	stdout, stderr, err := runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "sources", "add", sourceDir, "--name", "nested", "--type", "git", "--ref", "main")
+	if err != nil {
+		t.Fatalf("sources add nested git failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if err := os.RemoveAll(filepath.Join(cacheDir, "sources", "nested")); err != nil {
+		t.Fatalf("remove cached checkout: %v", err)
+	}
+	writeSourceSyncedAt(t, cacheDir, "nested", time.Now().Add(-11*time.Minute))
+
+	stdout, stderr, err = runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "sources", "status", "--tsv")
+	if err != nil {
+		t.Fatalf("sources status failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "nested\tgit\tstale\t") ||
+		!strings.Contains(stdout, filepath.Join(cacheDir, "generated-sources", "nested")) {
+		t.Fatalf("expected stale generated cache status, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+
+	stdout, stderr, err = runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "skills", "list", "--tsv")
+	if err != nil {
+		t.Fatalf("skills list should use generated cache without checkout: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "nested\tgo_go-mod\t") {
+		t.Fatalf("expected generated skill row, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+	if !strings.Contains(stderr, "Warning: using stale cache for source nested") {
+		t.Fatalf("expected stale generated cache warning, got stderr:\n%s", stderr)
+	}
+
+	stdout, stderr, err = runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "recommend", "--project", projectDir, "--tsv")
+	if err != nil {
+		t.Fatalf("recommend should use generated cache without checkout: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "nested\tgo_go-mod\t") ||
+		!strings.Contains(stderr, "Warning: using stale cache for source nested") {
+		t.Fatalf("expected generated recommendation with warning, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+
+	stdout, stderr, err = runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "skills", "install", "nested/go_go-mod", "--target", "directory", "--dir", targetDir)
+	if err != nil {
+		t.Fatalf("install should use generated cache without checkout: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Installed go_go-mod from nested to ") ||
+		!strings.Contains(stderr, "Warning: using stale cache for source nested") {
+		t.Fatalf("expected generated install with warning, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(targetDir, "go_go-mod", "SKILL.md")); err != nil {
+		t.Fatalf("expected installed generated skill: %v", err)
 	}
 }
 
@@ -1646,6 +1920,80 @@ func TestProjectUninstallRemovesLockfileWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestGlobalUninstallRemovesStaleRegistryRow(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, "config")
+	homeDir := filepath.Join(tmp, "home")
+	targetRoot := filepath.Join(homeDir, ".claude", "skills")
+	installedPath := filepath.Join(targetRoot, "rules-selector")
+	writeInstalledUsageRows(t, configDir, installedUsageRow(
+		"local", "rules-selector", "claude", "global", "-",
+		targetRoot, installedPath, filepath.Join(tmp, "source"),
+	))
+
+	output, err := runCLIForTest(
+		t,
+		[]string{"SKILLHUB_CONFIG_DIR=" + configDir, "HOME=" + homeDir},
+		"installed", "uninstall", "rules-selector", "--target", "claude", "--scope", "global",
+	)
+	if err != nil {
+		t.Fatalf("stale global uninstall failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(output, "Removed stale managed registry entry for rules-selector") {
+		t.Fatalf("expected stale registry removal output, got:\n%s", output)
+	}
+	registry, err := os.ReadFile(filepath.Join(configDir, "installed.tsv"))
+	if err != nil {
+		t.Fatalf("read registry: %v", err)
+	}
+	if strings.Contains(string(registry), "rules-selector") {
+		t.Fatalf("expected stale registry row removed, got:\n%s", registry)
+	}
+}
+
+func TestProjectUninstallRemovesStaleRegistryRowAndLockfile(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, "config")
+	sourceDir := filepath.Join(tmp, "source")
+	projectDir := filepath.Join(tmp, "project")
+	writeInstallableTestSource(t, sourceDir, "rules-selector", "v1")
+	writeTestSources(t, configDir, sourceDir)
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+
+	output, err := runCLIWithConfig(
+		t, configDir, "skills", "install", "rules-selector",
+		"--target", "codex", "--scope", "project", "--project", projectDir)
+	if err != nil {
+		t.Fatalf("project install failed: %v\n%s", err, output)
+	}
+	installedDir := filepath.Join(projectDir, ".agents", "skills", "rules-selector")
+	if err := os.RemoveAll(installedDir); err != nil {
+		t.Fatalf("remove installed skill: %v", err)
+	}
+
+	output, err = runCLIWithConfig(
+		t, configDir, "installed", "uninstall", "rules-selector",
+		"--target", "codex", "--scope", "project", "--project", projectDir)
+	if err != nil {
+		t.Fatalf("stale project uninstall failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(output, "Removed stale managed registry entry for rules-selector") {
+		t.Fatalf("expected stale registry removal output, got:\n%s", output)
+	}
+	if _, err := os.Stat(filepath.Join(projectDir, "skills.lock.toml")); !os.IsNotExist(err) {
+		t.Fatalf("expected empty project lockfile to be removed, stat err=%v", err)
+	}
+	registry, err := os.ReadFile(filepath.Join(configDir, "installed.tsv"))
+	if err != nil {
+		t.Fatalf("read registry: %v", err)
+	}
+	if strings.Contains(string(registry), "rules-selector") {
+		t.Fatalf("expected stale project registry row removed, got:\n%s", registry)
+	}
+}
+
 func TestRestoreInstallsMissingProjectSkillFromLockfileWithoutConfiguredSources(t *testing.T) {
 	tmp := t.TempDir()
 	configDir := filepath.Join(tmp, "config")
@@ -1872,6 +2220,47 @@ func TestProjectSidecarWithoutRegistryIsUnmanagedForListDetectAndUninstall(t *te
 	}
 	if !strings.Contains(output, "refusing to uninstall unmanaged skill") {
 		t.Fatalf("expected unmanaged uninstall refusal, got:\n%s", output)
+	}
+}
+
+func TestInstalledListAndTargetsDetectFollowSkillSymlinks(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, "config")
+	homeDir := filepath.Join(tmp, "home")
+	targetRoot := filepath.Join(homeDir, ".claude", "skills")
+	realSkillDir := filepath.Join(tmp, "real-skills", "find-skills")
+	if err := os.MkdirAll(realSkillDir, 0o755); err != nil {
+		t.Fatalf("mkdir real skill: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(realSkillDir, "SKILL.md"), []byte("# find-skills\n"), 0o644); err != nil {
+		t.Fatalf("write skill: %v", err)
+	}
+	if err := os.MkdirAll(targetRoot, 0o755); err != nil {
+		t.Fatalf("mkdir target root: %v", err)
+	}
+	linkPath := filepath.Join(targetRoot, "find-skills")
+	if err := os.Symlink(realSkillDir, linkPath); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	env := []string{"SKILLHUB_CONFIG_DIR=" + configDir, "HOME=" + homeDir}
+
+	output, err := runCLIForTest(
+		t, env, "installed", "list", "--target", "claude", "--scope", "global", "--tsv")
+	if err != nil {
+		t.Fatalf("installed list failed: %v\n%s", err, output)
+	}
+	wantInstalled := "claude\tglobal\tfind-skills\tno\t-\t-\t" + linkPath
+	if !strings.Contains(output, wantInstalled) {
+		t.Fatalf("expected symlinked skill in installed list %q, got:\n%s", wantInstalled, output)
+	}
+
+	output, err = runCLIForTest(t, env, "targets", "detect", "--tsv")
+	if err != nil {
+		t.Fatalf("targets detect failed: %v\n%s", err, output)
+	}
+	wantDetected := "claude\tglobal\tsupported\t" + targetRoot + "\tyes\t1\t0"
+	if !strings.Contains(output, wantDetected) {
+		t.Fatalf("expected symlinked skill in target detection %q, got:\n%s", wantDetected, output)
 	}
 }
 

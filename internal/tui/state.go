@@ -20,6 +20,7 @@ type model struct {
 	installedDetailCursor int
 	usageCursor           int
 	usageDetailCursor     int
+	sourceCursor          int
 	defaultCursor         int
 	targetCursor          int
 	offset                int
@@ -27,6 +28,7 @@ type model struct {
 	installedDetailOffset int
 	usageOffset           int
 	usageDetailOffset     int
+	sourceOffset          int
 	targetOffset          int
 	width                 int
 	height                int
@@ -55,6 +57,7 @@ type model struct {
 
 	projectDir       string
 	install          installFlowState
+	sourceProgress   sourceSyncProgressState
 	pendingUninstall InstalledSkill
 }
 

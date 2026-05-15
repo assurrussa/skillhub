@@ -19,18 +19,25 @@ func (b *Backend) ListSkills(query string) ([]Skill, string, error) {
 	}
 	out := []Skill{}
 	var warnings strings.Builder
+	loadedSources := 0
+	sourceErrors := []error{}
 	for _, source := range sources {
 		sourcePath, warning, err := b.CatalogSource(source)
 		if warning != "" {
 			_, _ = warnings.WriteString(warning)
 		}
 		if err != nil {
-			return nil, warnings.String(), err
+			sourceErrors = append(sourceErrors, fmt.Errorf("%s: %w", source.Name, err))
+			_, _ = fmt.Fprintf(&warnings, "Warning: source %s unavailable: %s\n", source.Name, err)
+			continue
 		}
 		rows, err := CatalogTable.ReadFile(filepath.Join(sourcePath, source.Catalog))
 		if err != nil {
-			return nil, warnings.String(), err
+			sourceErrors = append(sourceErrors, fmt.Errorf("%s: %w", source.Name, err))
+			_, _ = fmt.Fprintf(&warnings, "Warning: source %s unavailable: %s\n", source.Name, err)
+			continue
 		}
+		loadedSources++
 		for _, row := range rows {
 			if !isValidID(row.Name) {
 				return nil, warnings.String(), fmt.Errorf("invalid catalog skill name from %s: %s", source.Name, row.Name)
@@ -58,12 +65,26 @@ func (b *Backend) ListSkills(query string) ([]Skill, string, error) {
 		return out[i].Name < out[j].Name
 	})
 	if len(out) == 0 {
+		if loadedSources == 0 && len(sourceErrors) > 0 {
+			return nil, warnings.String(), allSourceCatalogsUnavailableError(sourceErrors)
+		}
 		if query != "" {
 			return nil, warnings.String(), fmt.Errorf("no skills matched query: %s", query)
 		}
 		return nil, warnings.String(), errors.New("no skills found")
 	}
 	return out, warnings.String(), nil
+}
+
+func allSourceCatalogsUnavailableError(sourceErrors []error) error {
+	if len(sourceErrors) == 1 {
+		return sourceErrors[0]
+	}
+	parts := make([]string, 0, len(sourceErrors))
+	for _, err := range sourceErrors {
+		parts = append(parts, err.Error())
+	}
+	return fmt.Errorf("no source catalogs available:\n%s", strings.Join(parts, "\n"))
 }
 
 func skillMatches(skill Skill, query string) bool {
@@ -79,7 +100,33 @@ type catalogMatch struct {
 	skill      string
 }
 
-func (b *Backend) findInstallMatch(wanted string, sources []Source) (catalogMatch, error) {
+type warningCollector struct {
+	seen map[string]bool
+	out  strings.Builder
+}
+
+func (w *warningCollector) Add(warning string) {
+	if warning == "" {
+		return
+	}
+	if w.seen == nil {
+		w.seen = map[string]bool{}
+	}
+	if w.seen[warning] {
+		return
+	}
+	w.seen[warning] = true
+	_, _ = w.out.WriteString(warning)
+}
+
+func (w *warningCollector) String() string {
+	if w == nil {
+		return ""
+	}
+	return w.out.String()
+}
+
+func (b *Backend) findInstallMatch(wanted string, sources []Source, warnings *warningCollector) (catalogMatch, error) {
 	wantedSource := ""
 	wantedSkill := wanted
 	if strings.Contains(wanted, "/") {
@@ -104,7 +151,8 @@ func (b *Backend) findInstallMatch(wanted string, sources []Source) (catalogMatc
 			continue
 		}
 		consideredSources++
-		sourcePath, _, err := b.CatalogSource(source)
+		sourcePath, warning, err := b.CatalogSource(source)
+		warnings.Add(warning)
 		if err != nil {
 			return catalogMatch{}, err
 		}
@@ -132,27 +180,28 @@ func (b *Backend) findInstallMatch(wanted string, sources []Source) (catalogMatc
 	return match, nil
 }
 
-func (b *Backend) Install(opts InstallOptions) (string, error) {
+func (b *Backend) Install(opts InstallOptions) (output string, warning string, err error) {
 	target, scope := installTargetScope(opts)
 	root, err := b.installTargetRoot(opts, target, scope)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	metadataScope := installMetadataScope(target, scope)
 	projectPath, err := b.installProjectPath(opts.Project, metadataScope)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	sources, err := b.ListSources()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if len(sources) == 0 {
-		return "", errors.New("no sources configured. Run: skillhub sources defaults list")
+		return "", "", errors.New("no sources configured. Run: skillhub sources defaults list")
 	}
-	names, err := b.installNames(opts, sources)
+	var warnings warningCollector
+	names, err := b.installNames(opts, sources, &warnings)
 	if err != nil {
-		return "", err
+		return "", warnings.String(), err
 	}
 	var out strings.Builder
 	for _, name := range names {
@@ -164,17 +213,18 @@ func (b *Backend) Install(opts InstallOptions) (string, error) {
 			MetadataScope: metadataScope,
 			ProjectPath:   projectPath,
 			Output:        &out,
+			Warnings:      &warnings,
 		})
 		if err != nil {
-			return out.String(), err
+			return out.String(), warnings.String(), err
 		}
 		if metadataScope == ScopeProject {
 			if err := b.persistProjectMetadata(projectPath); err != nil {
-				return out.String(), err
+				return out.String(), warnings.String(), err
 			}
 		}
 	}
-	return out.String(), nil
+	return out.String(), warnings.String(), nil
 }
 
 func (b *Backend) persistProjectMetadata(projectPath string) error {
@@ -217,11 +267,11 @@ func (b *Backend) installProjectPath(projectOption, metadataScope string) (strin
 	return b.ProjectDir(projectOption)
 }
 
-func (b *Backend) installNames(opts InstallOptions, sources []Source) ([]string, error) {
+func (b *Backend) installNames(opts InstallOptions, sources []Source, warnings *warningCollector) ([]string, error) {
 	names := append([]string(nil), opts.Names...)
 	if opts.All {
 		var err error
-		names, err = b.allInstallNames(sources)
+		names, err = b.allInstallNames(sources, warnings)
 		if err != nil {
 			return nil, err
 		}
@@ -232,11 +282,12 @@ func (b *Backend) installNames(opts InstallOptions, sources []Source) ([]string,
 	return names, nil
 }
 
-func (b *Backend) allInstallNames(sources []Source) ([]string, error) {
+func (b *Backend) allInstallNames(sources []Source, warnings *warningCollector) ([]string, error) {
 	names := []string{}
 	seen := map[string]bool{}
 	for _, source := range sources {
-		sourcePath, _, err := b.CatalogSource(source)
+		sourcePath, warning, err := b.CatalogSource(source)
+		warnings.Add(warning)
 		if err != nil {
 			return nil, err
 		}
@@ -287,10 +338,11 @@ type installOneOptions struct {
 	MetadataScope string
 	ProjectPath   string
 	Output        *strings.Builder
+	Warnings      *warningCollector
 }
 
 func (b *Backend) installOneSkill(opts installOneOptions) error {
-	match, err := b.findInstallMatch(opts.Name, opts.Sources)
+	match, err := b.findInstallMatch(opts.Name, opts.Sources, opts.Warnings)
 	if err != nil {
 		return err
 	}
@@ -363,17 +415,19 @@ func (b *Backend) Uninstall(opts UninstallOptions) (string, error) {
 		return "", err
 	}
 	skillDir := filepath.Join(root, skill)
-	if _, err := os.Stat(skillDir); err != nil {
-		return "", fmt.Errorf("installed skill not found: %s", skillDir)
-	}
-	if _, err := os.Stat(filepath.Join(skillDir, "SKILL.md")); err != nil {
-		return "", fmt.Errorf("refusing to uninstall non-skill directory: %s", skillDir)
-	}
 	metadataScope := scope
 	if target == TargetDirectory {
 		metadataScope = ScopeCustom
 	}
-	_, registryManaged := b.usageRowByPath(skillDir)
+	usage, registryManaged := b.usageRowByPath(skillDir)
+	if _, err := os.Stat(skillDir); err != nil {
+		return b.uninstallMissingSkill(
+			skill, root, skillDir, metadataScope, opts, usage, registryManaged, err,
+		)
+	}
+	if _, err := os.Stat(filepath.Join(skillDir, "SKILL.md")); err != nil {
+		return "", fmt.Errorf("refusing to uninstall non-skill directory: %s", skillDir)
+	}
 	_, sidecarManaged := readMetadata(filepath.Join(skillDir, ".skillhub.json"))
 	if metadataScope == ScopeProject {
 		sidecarManaged = false
@@ -387,14 +441,46 @@ func (b *Backend) Uninstall(opts UninstallOptions) (string, error) {
 	if err := b.removeUsageByPath(skillDir); err != nil {
 		return "", err
 	}
-	if metadataScope == ScopeProject {
-		projectPath, err := b.ProjectDir(opts.Project)
-		if err != nil {
-			return "", err
-		}
-		if err := b.WriteProjectLockfileFromRegistry(projectPath); err != nil {
-			return "", err
-		}
+	if err := b.refreshProjectLockfileAfterUninstall(metadataScope, opts, usage); err != nil {
+		return "", err
 	}
 	return fmt.Sprintf("Uninstalled %s from %s\n", skill, root), nil
+}
+
+func (b *Backend) uninstallMissingSkill(
+	skill, root, skillDir, metadataScope string,
+	opts UninstallOptions,
+	usage InstalledSkill,
+	registryManaged bool,
+	statErr error,
+) (string, error) {
+	if !os.IsNotExist(statErr) || !registryManaged {
+		return "", fmt.Errorf("installed skill not found: %s", skillDir)
+	}
+	if err := b.removeUsageByPath(skillDir); err != nil {
+		return "", err
+	}
+	if err := b.refreshProjectLockfileAfterUninstall(metadataScope, opts, usage); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Removed stale managed registry entry for %s from %s\n", skill, root), nil
+}
+
+func (b *Backend) refreshProjectLockfileAfterUninstall(
+	metadataScope string,
+	opts UninstallOptions,
+	usage InstalledSkill,
+) error {
+	if metadataScope != ScopeProject {
+		return nil
+	}
+	projectPath := strings.TrimSpace(usage.ProjectPath)
+	if projectPath == "" || projectPath == "-" {
+		var err error
+		projectPath, err = b.ProjectDir(opts.Project)
+		if err != nil {
+			return err
+		}
+	}
+	return b.WriteProjectLockfileFromRegistry(projectPath)
 }

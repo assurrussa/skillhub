@@ -173,9 +173,6 @@ func (b *Backend) ListInstalled(opts InstalledListOptions) ([]InstalledSkill, er
 		return nil, err
 	}
 	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
 		skillDir := filepath.Join(root, entry.Name())
 		if _, err := os.Stat(filepath.Join(skillDir, "SKILL.md")); err != nil {
 			continue
@@ -499,9 +496,6 @@ func (b *Backend) updateTargetRoot(root, target, scope, projectPath string, verb
 		return summary, err
 	}
 	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
 		skillDir := filepath.Join(root, entry.Name())
 		if _, err := os.Stat(filepath.Join(skillDir, "SKILL.md")); err != nil {
 			continue

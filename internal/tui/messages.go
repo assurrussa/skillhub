@@ -45,6 +45,11 @@ type commandDoneMsg struct {
 	err    error
 }
 
+type sourceSyncStepDoneMsg struct {
+	output string
+	err    error
+}
+
 type installStepDoneMsg struct {
 	output string
 	err    error
@@ -59,6 +64,20 @@ type installQueueItem struct {
 
 type installProgressState struct {
 	Items     []installQueueItem
+	Current   int
+	Completed int
+	Total     int
+	LastLine  string
+	Failed    bool
+	Error     string
+}
+
+type sourceSyncQueueItem struct {
+	Name string
+}
+
+type sourceSyncProgressState struct {
+	Items     []sourceSyncQueueItem
 	Current   int
 	Completed int
 	Total     int

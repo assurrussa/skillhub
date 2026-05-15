@@ -7,19 +7,19 @@ import (
 	"strings"
 )
 
-func (b *Backend) Recommend(opts RecommendOptions) ([]RecommendRow, error) {
+func (b *Backend) Recommend(opts RecommendOptions) ([]RecommendRow, string, error) {
 	projectDir, err := b.ProjectDir(opts.Project)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if info, err := os.Stat(projectDir); err != nil || !info.IsDir() {
-		return nil, fmt.Errorf("project directory does not exist: %s", projectDir)
+		return nil, "", fmt.Errorf("project directory does not exist: %s", projectDir)
 	}
-	skills, _, err := b.ListSkills("")
+	skills, warning, err := b.ListSkills("")
 	if err != nil {
-		return nil, err
+		return nil, warning, err
 	}
-	return newDefaultRecommendEngine().recommend(projectDir, skills), nil
+	return newDefaultRecommendEngine().recommend(projectDir, skills), warning, nil
 }
 
 type recommendEngine struct {

@@ -48,5 +48,9 @@ const (
 	targetAdapterSkillDir = "skill-dir"
 	targetGroupCustomDirs = "Custom directories"
 	targetGroupProjects   = "Projects"
+	queueStateDone        = "done"
+	queueStateFailed      = "failed"
+	queueStatePending     = "pending"
+	queueStateRunning     = "running"
 	uiSelectedCursor      = "›"
 )

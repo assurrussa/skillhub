@@ -49,7 +49,10 @@ var (
 	SelectedRowStyle = selectedRowStyle
 )
 
-type TestInstallProgress = installProgressState
+type (
+	TestInstallProgress = installProgressState
+	TestSourceProgress  = sourceSyncProgressState
+)
 
 type TestModel struct {
 	inner model
@@ -73,6 +76,7 @@ type TestModel struct {
 	InstalledDetailCursor int
 	UsageCursor           int
 	UsageDetailCursor     int
+	SourceCursor          int
 	DefaultCursor         int
 	TargetCursor          int
 	Offset                int
@@ -80,6 +84,7 @@ type TestModel struct {
 	InstalledDetailOffset int
 	UsageOffset           int
 	UsageDetailOffset     int
+	SourceOffset          int
 	TargetOffset          int
 	Width                 int
 	Height                int
@@ -115,6 +120,7 @@ type TestModel struct {
 	PendingInstall     InstallResult
 	InstallResult      InstallResult
 	InstallProgress    TestInstallProgress
+	SourceProgress     TestSourceProgress
 	PendingUninstall   InstalledSkill
 }
 
@@ -157,6 +163,11 @@ type LockStatusLoadedMsg struct {
 
 type CommandDoneMsg struct {
 	Action string
+	Output string
+	Err    error
+}
+
+type SourceSyncStepDoneMsg struct {
 	Output string
 	Err    error
 }
@@ -363,6 +374,7 @@ func testModelFromModel(m model) TestModel {
 		InstalledDetailCursor: m.installedDetailCursor,
 		UsageCursor:           m.usageCursor,
 		UsageDetailCursor:     m.usageDetailCursor,
+		SourceCursor:          m.sourceCursor,
 		DefaultCursor:         m.defaultCursor,
 		TargetCursor:          m.targetCursor,
 		Offset:                m.offset,
@@ -370,6 +382,7 @@ func testModelFromModel(m model) TestModel {
 		InstalledDetailOffset: m.installedDetailOffset,
 		UsageOffset:           m.usageOffset,
 		UsageDetailOffset:     m.usageDetailOffset,
+		SourceOffset:          m.sourceOffset,
 		TargetOffset:          m.targetOffset,
 		Width:                 m.width,
 		Height:                m.height,
@@ -405,6 +418,7 @@ func testModelFromModel(m model) TestModel {
 		PendingInstall:     m.install.pending,
 		InstallResult:      m.install.result,
 		InstallProgress:    m.install.progress,
+		SourceProgress:     m.sourceProgress,
 		PendingUninstall:   m.pendingUninstall,
 	}
 }
@@ -431,6 +445,7 @@ func (m TestModel) innerModel() model {
 	inner.installedDetailCursor = m.InstalledDetailCursor
 	inner.usageCursor = m.UsageCursor
 	inner.usageDetailCursor = m.UsageDetailCursor
+	inner.sourceCursor = m.SourceCursor
 	inner.defaultCursor = m.DefaultCursor
 	inner.targetCursor = m.TargetCursor
 	inner.offset = m.Offset
@@ -438,6 +453,7 @@ func (m TestModel) innerModel() model {
 	inner.installedDetailOffset = m.InstalledDetailOffset
 	inner.usageOffset = m.UsageOffset
 	inner.usageDetailOffset = m.UsageDetailOffset
+	inner.sourceOffset = m.SourceOffset
 	inner.targetOffset = m.TargetOffset
 	inner.width = m.Width
 	inner.height = m.Height
@@ -473,6 +489,7 @@ func (m TestModel) innerModel() model {
 	inner.install.pending = m.PendingInstall
 	inner.install.result = m.InstallResult
 	inner.install.progress = m.InstallProgress
+	inner.sourceProgress = m.SourceProgress
 	inner.pendingUninstall = m.PendingUninstall
 
 	return inner
@@ -496,6 +513,8 @@ func toInnerMsg(msg tea.Msg) tea.Msg {
 		return lockStatusLoadedMsg{status: msg.Status, err: msg.Err}
 	case CommandDoneMsg:
 		return commandDoneMsg{action: msg.Action, output: msg.Output, err: msg.Err}
+	case SourceSyncStepDoneMsg:
+		return sourceSyncStepDoneMsg{output: msg.Output, err: msg.Err}
 	case InstallStepDoneMsg:
 		return installStepDoneMsg{output: msg.Output, err: msg.Err}
 	default:
@@ -521,6 +540,8 @@ func toExportMsg(msg tea.Msg) tea.Msg {
 		return LockStatusLoadedMsg{Status: msg.status, Err: msg.err}
 	case commandDoneMsg:
 		return CommandDoneMsg{Action: msg.action, Output: msg.output, Err: msg.err}
+	case sourceSyncStepDoneMsg:
+		return SourceSyncStepDoneMsg{Output: msg.output, Err: msg.err}
 	case installStepDoneMsg:
 		return InstallStepDoneMsg{Output: msg.output, Err: msg.err}
 	default:

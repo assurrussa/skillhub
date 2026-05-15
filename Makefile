@@ -6,20 +6,19 @@ SKILLHUB ?= $(GO) run ./cmd/skillhub
 SKILLHUB_DEV ?= $(GO) run ./cmd/skillhub-dev
 AGENT_RULES_PATH ?= ../agent-rules
 
-.PHONY: help check check-all verify smoke-temp tui-temp test vet diff-check tidy generate fmt lint test-race bench-all cover-html maintainer-check
+.PHONY: help
 
 help:
 	@printf '%s\n' \
 		'Targets:' \
-		'  make check       Run Go dev verification' \
-		'  make check-all   Alias for make verify' \
+		'  make check       Run local Unix maintenance checks' \
+		'  make check-all   Run all checks' \
 		'  make test        Run Go tests' \
 		'  make vet         Run go vet' \
 		'  make diff-check  Run git diff --check' \
 		'  make verify      Run Go dev verification' \
 		'  make smoke-temp  Test default source and temp install without user config' \
 		'  make tui-temp    Open TUI with temp config and temp install dir' \
-		'  make maintainer-check  Run local Unix maintenance checks' \
 		'' \
 		'Variables:' \
 		'  AGENT_RULES_PATH=../agent-rules' \
@@ -27,10 +26,11 @@ help:
 		'  SKILLHUB_DEV="$(GO) run ./cmd/skillhub-dev"'
 
 
-check check-all verify:
+verify:
 	SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" $(SKILLHUB_DEV) verify
 
-maintainer-check: tidy generate fmt vet lint test test-race cover-html
+check: tidy generate fmt vet lint test test-race bench-all cover-html smoke-temp
+check-all: check verify
 
 tidy:
 	$(GO) mod tidy

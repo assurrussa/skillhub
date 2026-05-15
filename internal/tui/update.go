@@ -12,12 +12,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.ensureCursorVisible()
-		m.ensureInstalledCursorVisible()
-		m.ensureUsageCursorVisible()
-		m.ensureUsageDetailCursorVisible()
-		m.ensureSourceCursorVisible()
-		m.ensureTargetCursorVisible()
+		m.ensureAllCursorsVisible()
 		return m, nil
 	case spinnerTickMsg:
 		if !m.busy {
@@ -33,8 +28,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateSourcesLoaded(msg)
 	case installedLoadedMsg:
 		return m.updateInstalledLoaded(msg)
-	case usageLoadedMsg:
-		return m.updateUsageLoaded(msg)
 	case targetsLoadedMsg:
 		return m.updateTargetsLoaded(msg)
 	case lockStatusLoadedMsg:
@@ -92,6 +85,7 @@ func (m model) updateDefaultsLoaded(msg defaultsLoadedMsg) (tea.Model, tea.Cmd) 
 	}
 	m.defaults = msg.defaults
 	m.defaultCursor = clampCursor(m.defaultCursor, len(m.defaults))
+	m.ensureDefaultCursorVisible()
 	m.status = fmt.Sprintf("Loaded %d source default(s).", len(m.defaults))
 	return m, nil
 }
@@ -141,43 +135,6 @@ func (m model) updateInstalledLoaded(msg installedLoadedMsg) (tea.Model, tea.Cmd
 		m.status = fmt.Sprintf("Loaded %d installed skill row(s).", len(m.installedRows))
 	}
 	return m, nil
-}
-
-func (m model) updateUsageLoaded(msg usageLoadedMsg) (tea.Model, tea.Cmd) {
-	m.loading = false
-	returnToDetails := m.returnToUsageDetails
-	detailKey := m.usageDetailKey
-	m.returnToUsageDetails = false
-	if msg.err != nil {
-		m.postReloadStatus = ""
-		m.status = "Load usage failed: " + msg.err.Error()
-		return m, nil
-	}
-	m.usageRows = msg.rows
-	m.applyUsageFilter()
-	m.usageCursor = clampCursor(m.usageCursor, len(m.usageSummaries))
-	m.ensureUsageCursorVisible()
-	m = m.restoreUsageDetails(returnToDetails, detailKey)
-	m.applyPostReloadStatus(fmt.Sprintf("Loaded %d managed usage row(s).", len(m.usageRows)))
-	return m, nil
-}
-
-func (m model) restoreUsageDetails(returnToDetails bool, detailKey string) model {
-	if !returnToDetails || strings.TrimSpace(detailKey) == "" {
-		m.viewMode = viewUsage
-		return m
-	}
-	m.usageDetailKey = detailKey
-	detailRows := m.usageDetailRows()
-	if len(detailRows) == 0 {
-		m.viewMode = viewUsage
-		m.usageDetailKey = ""
-		return m
-	}
-	m.usageDetailCursor = clampCursor(m.usageDetailCursor, len(detailRows))
-	m.ensureUsageDetailCursorVisible()
-	m.viewMode = viewUsageDetails
-	return m
 }
 
 func (m *model) applyPostReloadStatus(defaultStatus string) {
@@ -341,15 +298,6 @@ func (m model) afterCommandSuccess(action, successStatus string) (tea.Model, tea
 		m.status = "Reloading installed skills..."
 		return m, loadInstalled(m.repoRoot)
 	}
-	if action == actionUpdateUsage {
-		m.loading = true
-		if !m.returnToUsageDetails {
-			m.viewMode = viewUsage
-		}
-		m.postReloadStatus = successStatus
-		m.status = "Reloading usage..."
-		return m, loadUsage(m.repoRoot)
-	}
 	if action == "Restore project" {
 		m.loading = true
 		m.viewMode = viewUpdate
@@ -377,10 +325,6 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if m.searchMode {
 		return m.updateSearchKey(msg)
-	}
-
-	if m.usageFilterMode {
-		return m.updateUsageFilterKey(msg)
 	}
 
 	if m.sourceProgress.Failed {
@@ -427,10 +371,6 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.installedSectionModel().updateDetailsKey(msg)
 	}
 
-	if m.viewMode == viewUsageDetails {
-		return m.usageSection().updateDetailsKey(msg)
-	}
-
 	if m.viewMode == viewInstallResult {
 		return m.installFlow().updateResultKey(msg)
 	}
@@ -444,10 +384,6 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if m.viewMode == viewInstalled {
 		return m.installedSectionModel().updateKey(msg)
-	}
-
-	if m.viewMode == viewUsage {
-		return m.usageSection().updateKey(msg)
 	}
 
 	if m.viewMode == viewSources {
@@ -480,33 +416,6 @@ func (m model) updateSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.Type == tea.KeyRunes {
 		m.search += msg.String()
 		m.applyFilter()
-	}
-	return m, nil
-}
-
-func (m model) updateUsageFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case keyEsc:
-		m.usageFilterMode = false
-		m.usageFilter = ""
-		m.applyUsageFilter()
-		m.status = statusUsageFilterClear
-		return m, nil
-	case keyEnter:
-		m.usageFilterMode = false
-		m.status = "Usage filter applied."
-		return m, nil
-	case keyBackspace:
-		if len(m.usageFilter) > 0 {
-			runes := []rune(m.usageFilter)
-			m.usageFilter = string(runes[:len(runes)-1])
-			m.applyUsageFilter()
-		}
-		return m, nil
-	}
-	if msg.Type == tea.KeyRunes {
-		m.usageFilter += msg.String()
-		m.applyUsageFilter()
 	}
 	return m, nil
 }
@@ -565,15 +474,12 @@ func (m model) updateGlobalKey(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
 		next, cmd := m.openDashboardSection(viewSkills)
 		return true, next, cmd
 	case "3":
-		next, cmd := m.openDashboardSection(viewUsage)
-		return true, next, cmd
-	case "4":
 		next, cmd := m.openDashboardSection(viewSources)
 		return true, next, cmd
-	case "5":
+	case "4":
 		next, cmd := m.openDashboardSection(viewTargets)
 		return true, next, cmd
-	case "6":
+	case "5":
 		next, cmd := m.openDashboardSection(viewUpdate)
 		return true, next, cmd
 	default:
@@ -641,7 +547,7 @@ func (m model) updateSkillsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		return m.reloadCurrentView("Reloading catalog...")
 	case "s":
-		m.status = "Open 4 Sources to update source caches."
+		m.status = "Open 3 Sources to update source caches."
 		return m, nil
 	default:
 		return m, nil
@@ -688,9 +594,6 @@ func (m model) reloadCurrentView(status string) (tea.Model, tea.Cmd) {
 		m.viewMode = viewInstalled
 		m.loadingInstalled = true
 		return m, loadInstalled(m.repoRoot)
-	case viewUsage:
-		m.viewMode = viewUsage
-		return m, loadUsage(m.repoRoot)
 	case viewSources:
 		m.viewMode = viewSources
 		return m, loadSources(m.repoRoot)
@@ -726,11 +629,6 @@ func (m model) openDashboardSection(section string) (tea.Model, tea.Cmd) {
 		m.viewMode = viewInstalled
 		m.status = statusLoadingInstalled
 		return m, loadInstalled(m.repoRoot)
-	case viewUsage:
-		m.loading = true
-		m.viewMode = viewUsage
-		m.status = "Loading usage..."
-		return m, loadUsage(m.repoRoot)
 	case viewSources:
 		m.loading = true
 		m.viewMode = viewSources
@@ -777,7 +675,7 @@ func (m *model) clearSkillSearch() {
 
 func (m model) currentViewLoading() bool {
 	switch m.viewMode {
-	case viewDetails, viewInstalledDetails, viewUsageDetails, viewInstallResult, viewAddSource, viewConfirmDelete, viewHelp:
+	case viewDetails, viewInstalledDetails, viewInstallResult, viewAddSource, viewConfirmDelete, viewHelp:
 		return false
 	}
 	switch m.dashboardSection() {
@@ -792,7 +690,7 @@ func (m model) currentViewLoading() bool {
 
 func (m model) canMoveDashboardSection() bool {
 	switch m.viewMode {
-	case viewSkills, viewInstalled, viewUsage, viewSources, viewUpdate:
+	case viewSkills, viewInstalled, viewSources, viewUpdate:
 		return true
 	case viewTargets:
 		return m.install.targetPurpose != targetPurposeInstall
@@ -883,7 +781,7 @@ func (m model) updateInstalledKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "u":
 		summary, ok := m.currentInstalledSummary()
 		if !ok {
-			m.status = "No installed skill selected."
+			m.status = statusNoInstalledSkill
 			return m, nil
 		}
 		if len(summary.Rows) != 1 {
@@ -898,7 +796,7 @@ func (m model) updateInstalledKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "x":
 		summary, ok := m.currentInstalledSummary()
 		if !ok {
-			m.status = "No installed skill selected."
+			m.status = statusNoInstalledSkill
 			return m, nil
 		}
 		if len(summary.Rows) != 1 {
@@ -917,7 +815,7 @@ func (m model) updateInstalledKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keyEnter:
 		row, ok := m.currentInstalled()
 		if !ok {
-			m.status = "No installed skill selected."
+			m.status = statusNoInstalledSkill
 			return m, nil
 		}
 		m.installedDetailKey = installedSkillKey(row)
@@ -979,150 +877,6 @@ func (m model) updateInstalledDetailsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.viewMode = viewConfirmDelete
 		m.status = "Confirm uninstall."
 		return m, nil
-	default:
-		return m, nil
-	}
-}
-
-func (m model) updateUsageKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "q":
-		return m, tea.Quit
-	case "/":
-		m.usageFilterMode = true
-		m.status = "Type usage filter."
-		return m, nil
-	case keyEsc:
-		if strings.TrimSpace(m.usageFilter) != "" {
-			m.usageFilter = ""
-			m.applyUsageFilter()
-			m.status = statusUsageFilterClear
-		}
-		return m, nil
-	case "c":
-		if strings.TrimSpace(m.usageFilter) != "" {
-			m.usageFilter = ""
-			m.applyUsageFilter()
-			m.status = statusUsageFilterClear
-		}
-		return m, nil
-	case "up", "k":
-		if m.usageCursor > 0 {
-			m.usageCursor--
-			m.ensureUsageCursorVisible()
-		}
-		return m, nil
-	case keyDown, "j":
-		if m.usageCursor < len(m.usageSummaries)-1 {
-			m.usageCursor++
-			m.ensureUsageCursorVisible()
-		}
-		return m, nil
-	case keyEnter:
-		summary, ok := m.currentUsageSummary()
-		if !ok {
-			m.status = "No managed usage selected."
-			return m, nil
-		}
-		m.usageDetailKey = summary.Key
-		m.usageDetailCursor = 0
-		m.usageDetailOffset = 0
-		m.ensureUsageDetailCursorVisible()
-		m.viewMode = viewUsageDetails
-		m.status = "Viewing usage for " + summary.Key + "."
-		return m, nil
-	case "u":
-		m.returnToUsageDetails = false
-		summary, ok := m.currentUsageSummary()
-		if !ok {
-			m.status = "No managed usage selected."
-			return m, nil
-		}
-		if summary.ProjectCount == 0 {
-			m.status = summary.Key + " has no recorded project installs to update."
-			return m, nil
-		}
-		rows := m.projectUsageRowsForKey(summary.Key)
-		if len(rows) == 0 {
-			m.status = summary.Key + " has no visible recorded project installs to update."
-			return m, nil
-		}
-		m.busy = true
-		m.status = "Updating visible project usage for " + summary.Key + "..."
-		return m, tea.Batch(runUsageBulkUpdateCommand(m.repoRoot, rows), busyTick())
-	case "U":
-		m.returnToUsageDetails = false
-		rows := m.visibleProjectUsageRows()
-		if len(rows) == 0 {
-			m.status = "No visible recorded project installs to update."
-			return m, nil
-		}
-		m.busy = true
-		m.status = fmt.Sprintf("Updating %d visible project usage row(s)...", len(rows))
-		return m, tea.Batch(runUsageBulkUpdateCommand(m.repoRoot, rows), busyTick())
-	case "r":
-		m.returnToUsageDetails = false
-		return m.reloadCurrentView("Reloading usage...")
-	default:
-		return m, nil
-	}
-}
-
-func (m model) updateUsageDetailsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "q":
-		return m, tea.Quit
-	case "/":
-		m.usageFilterMode = true
-		m.status = "Type usage filter."
-		return m, nil
-	case keyEsc, "b":
-		m.viewMode = viewUsage
-		m.returnToUsageDetails = false
-		m.status = "Returned to usage."
-		return m, nil
-	case "up", "k":
-		if m.usageDetailCursor > 0 {
-			m.usageDetailCursor--
-			m.ensureUsageDetailCursorVisible()
-		}
-		return m, nil
-	case keyDown, "j":
-		rows := m.usageDetailRows()
-		if m.usageDetailCursor < len(rows)-1 {
-			m.usageDetailCursor++
-			m.ensureUsageDetailCursorVisible()
-		}
-		return m, nil
-	case "u":
-		row, ok := m.currentUsageDetail()
-		if !ok {
-			m.status = "No usage location selected."
-			return m, nil
-		}
-		if !isProjectUsageRow(row) {
-			m.status = installedSkillKey(row) + " location is not a recorded project install."
-			return m, nil
-		}
-		m.busy = true
-		m.returnToUsageDetails = true
-		m.status = "Updating recorded project usage for " + installedSkillKey(row) + "..."
-		return m, tea.Batch(runInstalledCommand(m.repoRoot, actionUpdateUsage, usageUpdateArgsForLocation(row)...), busyTick())
-	case "U":
-		rows := projectUsageRows(m.usageDetailRows())
-		if len(rows) == 0 {
-			m.status = m.usageDetailKey + " has no visible recorded project installs to update."
-			return m, nil
-		}
-		m.busy = true
-		m.returnToUsageDetails = true
-		m.status = fmt.Sprintf("Updating %d visible project usage row(s)...", len(rows))
-		return m, tea.Batch(runUsageBulkUpdateCommand(m.repoRoot, rows), busyTick())
-	case "r":
-		m.loading = true
-		m.returnToUsageDetails = true
-		m.status = "Reloading usage..."
-		return m, loadUsage(m.repoRoot)
 	default:
 		return m, nil
 	}
@@ -1349,11 +1103,13 @@ func (m model) updateDefaultsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		if m.defaultCursor > 0 {
 			m.defaultCursor--
+			m.ensureDefaultCursorVisible()
 		}
 		return m, nil
 	case keyDown, "j":
 		if m.defaultCursor < len(m.defaults)-1 {
 			m.defaultCursor++
+			m.ensureDefaultCursorVisible()
 		}
 		return m, nil
 	case keyEnter, "a":

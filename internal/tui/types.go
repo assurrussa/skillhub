@@ -69,16 +69,6 @@ type InstallTargetChoice struct {
 	Managed     string
 }
 
-type UsageSummary struct {
-	Key           string
-	Source        string
-	Skill         string
-	InstallCount  int
-	ProjectCount  int
-	TargetCount   int
-	LatestUpdated string
-}
-
 type ProjectLockStatus struct {
 	Path      string
 	Present   bool
@@ -93,8 +83,6 @@ type ProjectLockStatus struct {
 const (
 	viewSkills           = "skills"
 	viewInstalled        = "installed"
-	viewUsage            = "usage"
-	viewUsageDetails     = "usage-details"
 	viewSources          = "sources"
 	viewUpdate           = "update"
 	viewDefaults         = "defaults"

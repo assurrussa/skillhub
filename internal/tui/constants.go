@@ -1,21 +1,17 @@
 package tui
 
 const (
-	flagDir      = "--dir"
-	flagScope    = "--scope"
-	flagProjects = "--projects"
-	flagTSV      = "--tsv"
-	flagProject  = "--project"
-	flagVerbose  = "--verbose"
-	flagName     = "--name"
-	flagTarget   = "--target"
+	flagDir     = "--dir"
+	flagScope   = "--scope"
+	flagTSV     = "--tsv"
+	flagProject = "--project"
+	flagVerbose = "--verbose"
+	flagName    = "--name"
+	flagTarget  = "--target"
 
 	commandAdd       = "add"
 	commandUninstall = "uninstall"
 	commandUpdate    = "update"
-	commandUsage     = "usage"
-
-	actionUpdateUsage = "Update usage"
 
 	labelCodex   = "Codex"
 	labelClaude  = "Claude"
@@ -24,9 +20,9 @@ const (
 
 	statusLoadingInstalled = "Loading installed skills..."
 	statusEnterSource      = "Enter a source path or git URL."
+	statusNoInstalledSkill = "No installed skill selected."
 	statusSyncing          = "Syncing sources..."
 	statusReturnedSkills   = "Returned to skills."
-	statusUsageFilterClear = "Usage filter cleared."
 	statusSelectTarget     = "Select at least one supported install target."
 
 	keyEsc       = "esc"

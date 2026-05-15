@@ -34,6 +34,7 @@ func (m model) View() string {
 			bodyModel.bodyHeight = 0
 		}
 	}
+	bodyModel.ensureActiveCursorVisible()
 	body := bodyModel.renderBody(contentWidth)
 
 	parts := []string{
@@ -91,10 +92,9 @@ func (m model) renderNavigation(width int) string {
 	}{
 		{"1", "Installed", viewInstalled},
 		{"2", "Skills", viewSkills},
-		{"3", "Usage", viewUsage},
-		{"4", "Sources", viewSources},
-		{"5", labelTargets, viewTargets},
-		{"6", "Update", viewUpdate},
+		{"3", "Sources", viewSources},
+		{"4", labelTargets, viewTargets},
+		{"5", "Update", viewUpdate},
 	}
 	rendered := make([]string, 0, len(items))
 	current := m.dashboardSection()
@@ -151,9 +151,6 @@ func (m model) renderBody(width int) string {
 	if m.viewMode == viewInstalledDetails {
 		return m.renderPanel("Installed skill details", m.installedSectionModel().detailsContent(width-6), width)
 	}
-	if m.viewMode == viewUsageDetails {
-		return m.renderPanel("Usage details", m.usageSection().detailsContent(width-6), width)
-	}
 	if m.viewMode == viewInstallResult {
 		return m.renderPanel("Install complete", m.installFlow().resultContent(width-6), width)
 	}
@@ -163,9 +160,6 @@ func (m model) renderBody(width int) string {
 	}
 	if m.viewMode == viewInstalled {
 		return m.renderPanel("Installed skills", m.installedSectionModel().content(width-6), width)
-	}
-	if m.viewMode == viewUsage {
-		return m.renderPanel("Usage", m.usageSection().content(width-6), width)
 	}
 	if m.viewMode == viewSources {
 		return m.renderPanel("Sources", m.sourcesSection().content(width-6), width)
@@ -635,141 +629,6 @@ func installedDetailMetaParts(row InstalledSkill) []string {
 	return metaParts
 }
 
-func (m model) usageContent(_ int) string {
-	legend := helpStyle.Render("Registry usage only: managed installs created or updated by Skillhub")
-	visibleRows := m.visibleUsageRows()
-	if len(m.usageSummaries) == 0 {
-		if strings.TrimSpace(m.usageFilter) != "" {
-			return legend + "\n\n" + labelLine("Filter", m.usageFilter) + "\n\nNo managed usage matched the filter."
-		}
-		return legend + "\n\nNo managed usage recorded.\n\nInstall a skill through Skillhub to create usage records."
-	}
-
-	var b strings.Builder
-	stats := installedOverviewStats(visibleRows)
-	_, _ = fmt.Fprintf(&b, "%s   %s   %s   %s\n",
-		badgeStyle.Render(fmt.Sprintf("Installs: %d", stats.Installed)),
-		badgeStyle.Render(fmt.Sprintf("Skills: %d", stats.Skills)),
-		badgeStyle.Render(fmt.Sprintf("Projects: %d", stats.Projects)),
-		badgeStyle.Render(fmt.Sprintf("Managed: %d", stats.Managed)),
-	)
-	_, _ = fmt.Fprintln(&b)
-	filter := emptyLabel(m.usageFilter, "none")
-	if m.usageFilterMode {
-		filter = m.usageFilter + "_"
-	}
-	_, _ = fmt.Fprintf(&b,
-		"%s   %s\n",
-		labelLine("Filter", filter),
-		labelLine("Visible", fmt.Sprintf("%d/%d", len(visibleRows), len(m.usageRows))),
-	)
-	_, _ = fmt.Fprintln(&b)
-	_, _ = fmt.Fprintln(&b, legend)
-	_, _ = fmt.Fprintln(&b)
-
-	visible := m.usageVisibleCount()
-	end := m.usageOffset + visible
-	if end > len(m.usageSummaries) {
-		end = len(m.usageSummaries)
-	}
-	for rowIndex, summary := range m.usageSummaries[m.usageOffset:end] {
-		i := m.usageOffset + rowIndex
-		cursor := " "
-		if i == m.usageCursor {
-			cursor = uiSelectedCursor
-		}
-		title := fmt.Sprintf("%s %s", cursor, summary.Key)
-		if i == m.usageCursor {
-			title = activeRowStyle.Render(title)
-		}
-		if summary.ProjectCount > 0 {
-			title = selectedRowStyle.Render(title)
-		}
-		meta := fmt.Sprintf("    installs: %d   projects: %d   targets: %d",
-			summary.InstallCount,
-			summary.ProjectCount,
-			summary.TargetCount,
-		)
-		if strings.TrimSpace(summary.LatestUpdated) != "" && summary.LatestUpdated != "-" {
-			meta += "   latest: " + summary.LatestUpdated
-		}
-		_, _ = fmt.Fprintln(&b, title)
-		_, _ = fmt.Fprintln(&b, subtleStyle.Render(meta))
-		if rowIndex != end-m.usageOffset-1 {
-			_, _ = fmt.Fprintln(&b)
-		}
-	}
-	return strings.TrimRight(b.String(), "\n")
-}
-
-func (m model) usageDetailsContent(width int) string {
-	rows := m.usageDetailRows()
-	if len(rows) == 0 {
-		return "No usage locations found."
-	}
-	summary := summarizeUsageRows(installedSkillKey(rows[0]), rows)
-
-	var b strings.Builder
-	_, _ = fmt.Fprintln(&b, titleStyle.Render(summary.Key))
-	_, _ = fmt.Fprintln(&b)
-	_, _ = fmt.Fprintf(&b, "%s   %s   %s\n\n",
-		badgeStyle.Render(fmt.Sprintf("Installed in: %d", summary.InstallCount)),
-		badgeStyle.Render(fmt.Sprintf("Projects: %d", summary.ProjectCount)),
-		badgeStyle.Render(fmt.Sprintf("Targets: %d", summary.TargetCount)),
-	)
-	if strings.TrimSpace(m.usageFilter) != "" || m.usageFilterMode {
-		filter := m.usageFilter
-		if m.usageFilterMode {
-			filter += "_"
-		}
-		_, _ = fmt.Fprintf(&b, "%s\n\n", labelLine("Filter", emptyLabel(filter, "none")))
-	}
-
-	visible := m.usageDetailVisibleCount()
-	end := m.usageDetailOffset + visible
-	if end > len(rows) {
-		end = len(rows)
-	}
-	for rowIndex, row := range rows[m.usageDetailOffset:end] {
-		i := m.usageDetailOffset + rowIndex
-		cursor := " "
-		if i == m.usageDetailCursor {
-			cursor = uiSelectedCursor
-		}
-		title := fmt.Sprintf("%s %s", cursor, targetScopeLabel(row.Target, row.Scope))
-		if row.Scope == scopeProject && strings.TrimSpace(row.ProjectPath) != "" && row.ProjectPath != "-" {
-			title = fmt.Sprintf("%s %s %s", cursor, projectBadgeStyle.Render("LOCAL PROJECT"), targetScopeLabel(row.Target, row.Scope))
-		}
-		if i == m.usageDetailCursor {
-			title = activeRowStyle.Render(title)
-		}
-		_, _ = fmt.Fprintln(&b, title)
-		if strings.TrimSpace(row.ProjectPath) != "" && row.ProjectPath != "-" {
-			_, _ = fmt.Fprintln(&b, "    "+projectBadgeStyle.Render("Project root: "+truncate(row.ProjectPath, max(12, width-18))))
-		}
-		_, _ = fmt.Fprintln(&b, subtleStyle.Render("    path: "+truncate(row.Path, max(12, width-10))))
-		metaParts := []string{"source: " + emptyLabel(row.Source, "-")}
-		if strings.TrimSpace(row.ContentHash) != "" && row.ContentHash != "-" {
-			metaParts = append(metaParts, "hash: "+row.ContentHash)
-		}
-		if strings.TrimSpace(row.InstalledAt) != "" && row.InstalledAt != "-" {
-			metaParts = append(metaParts, "installed: "+row.InstalledAt)
-		}
-		if strings.TrimSpace(row.UpdatedAt) != "" && row.UpdatedAt != "-" {
-			metaParts = append(metaParts, "updated: "+row.UpdatedAt)
-		}
-		if row.PathMissing {
-			metaParts = append(metaParts, core.ResultMissing)
-		}
-		meta := indent(wrapText(strings.Join(metaParts, "   "), max(12, width-4)), "    ")
-		_, _ = fmt.Fprintln(&b, subtleStyle.Render(meta))
-		if rowIndex != end-m.usageDetailOffset-1 {
-			_, _ = fmt.Fprintln(&b)
-		}
-	}
-	return strings.TrimRight(b.String(), "\n")
-}
-
 func (m model) installProgressContent(width int) string {
 	item, ok := m.install.progress.currentItem()
 	if !ok {
@@ -947,9 +806,15 @@ func (m model) sourcesContent(width int) string {
 		if source.Status != "" {
 			name += " [" + source.Status + "]"
 		}
-		nameLine := titleStyle.Render(name)
+		cursor := " "
 		if i == m.sourceCursor {
-			nameLine = activeRowStyle.Width(width).Render(name)
+			cursor = uiSelectedCursor
+		}
+		nameLine := fmt.Sprintf("%s %s", cursor, name)
+		if i == m.sourceCursor {
+			nameLine = activeRowStyle.Width(width).Render(nameLine)
+		} else {
+			nameLine = titleStyle.Render(nameLine)
 		}
 		_, _ = fmt.Fprintln(&b, nameLine)
 		lastSync := emptyLabel(source.LastSyncedAt, "-")
@@ -1026,7 +891,7 @@ func (m model) updateContent(width int) string {
 		labelLine("Restore", "skillhub restore --project "+m.projectDir),
 		"",
 		wrapText(
-			"Use 1 Installed to update target folders, or 3 Usage to update recorded project installs for a highlighted skill.",
+			"Use 1 Installed to update target folders. Project usage maintenance stays CLI-only.",
 			width,
 		),
 	}
@@ -1144,14 +1009,14 @@ func (m model) installConfirmContent(width int) string {
 
 func (m model) helpContent(_ int) string {
 	lines := []string{
-		"1/2/3/4/5/6 switch sections",
+		"1/2/3/4/5 switch sections",
 		"left/right  switch sections",
 		"j/k         move",
 		"space       select or toggle where applicable",
 		"enter       open or confirm",
-		"/           search skills or filter usage rows",
-		"u           update highlighted install, usage, or source entry",
-		"U           update visible Usage rows or all Sources",
+		"/           search skills",
+		"u           update highlighted install or source entry",
+		"U           update all Sources",
 		"x           uninstall highlighted managed skill",
 		"s           update all Sources",
 		"r           reload current section or restore lockfile in Update",
@@ -1191,10 +1056,12 @@ func (m model) defaultsContent(width int) string {
 		return "No source defaults available."
 	}
 	var b strings.Builder
-	for i, source := range m.defaults {
+	window := clampCursorWindow(m.defaultCursor, m.defaultOffset, len(m.defaults), m.defaultVisibleCount())
+	for row, source := range m.defaults[window.Start:window.End] {
+		i := window.Start + row
 		cursor := " "
-		if i == m.defaultCursor {
-			cursor = ">"
+		if i == window.Cursor {
+			cursor = uiSelectedCursor
 		}
 		line := fmt.Sprintf("%s %-20s %-8s %-12s %s",
 			cursor,
@@ -1203,7 +1070,7 @@ func (m model) defaultsContent(width int) string {
 			truncate(source.Ref, 12),
 			truncate(source.Location, width-46),
 		)
-		if i == m.defaultCursor {
+		if i == window.Cursor {
 			line = activeRowStyle.Width(width).Render(line)
 		}
 		_, _ = fmt.Fprintln(&b, line)
@@ -1217,9 +1084,6 @@ func (m model) helpText() string {
 	}
 	if m.install.progress.Failed {
 		return "enter/esc back to targets  q quit"
-	}
-	if m.usageFilterMode {
-		return "type filter  enter apply  backspace delete  esc clear  ctrl+c quit"
 	}
 	if m.viewMode == viewHelp {
 		return "enter/esc back  q quit"
@@ -1242,9 +1106,6 @@ func (m model) helpText() string {
 	if m.viewMode == viewInstalledDetails {
 		return "j/k move location  u update  x uninstall  esc back  q quit"
 	}
-	if m.viewMode == viewUsageDetails {
-		return "j/k move location  / filter  u update location  U update visible  r reload  esc back  q quit"
-	}
 	if m.viewMode == viewInstallResult {
 		return "enter/b back  t targets  q quit"
 	}
@@ -1252,25 +1113,22 @@ func (m model) helpText() string {
 		return "enter/y confirm  esc/n cancel  q quit"
 	}
 	if m.viewMode == viewInstalled {
-		return "1-6/left-right sections  j/k move  enter locations  u update single  x uninstall single  r reload  ? help  q quit"
-	}
-	if m.viewMode == viewUsage {
-		return "1-6/left-right sections  j/k move  / filter  enter details  u update skill  U update visible  r reload  ? help  q quit"
+		return "1-5/left-right sections  j/k move  enter locations  u update single  x uninstall single  r reload  ? help  q quit"
 	}
 	if m.viewMode == viewSources {
-		return "1-6/left-right sections  j/k move  u update source  U/s update all  d presets  n custom  r reload  ? help  q quit"
+		return "1-5/left-right sections  j/k move  u update source  U/s update all  d presets  n custom  r reload  ? help  q quit"
 	}
 	if m.viewMode == viewUpdate {
-		return "1-6/left-right sections  r restore project lockfile  u installed screen  ? help  q quit"
+		return "1-5/left-right sections  r restore project lockfile  u installed screen  ? help  q quit"
 	}
 	if m.viewMode == viewTargets {
 		if m.install.targetPurpose == targetPurposeInstall {
 			return "j/k move  space toggle  enter/i preview  a all  c clear  b scope  r reload  ? help  q quit"
 		}
-		return "1-6/left-right sections  j/k move  r reload  ? help  q quit"
+		return "1-5/left-right sections  j/k move  r reload  ? help  q quit"
 	}
 	return strings.Join([]string{
-		"1-6/left-right sections",
+		"1-5/left-right sections",
 		"j/k move",
 		"space queue",
 		"enter details",

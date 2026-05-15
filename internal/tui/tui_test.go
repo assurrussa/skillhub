@@ -2,6 +2,7 @@ package tui_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -87,7 +88,6 @@ const (
 	testLabelOpenCode        = "OpenCode"
 	testGeminiSkillsDesc     = "Gemini skills"
 	testOpenCodeSkillsDesc   = "OpenCode skills"
-	testCommandUsage         = "usage"
 	commandUpdate            = "update"
 )
 
@@ -146,13 +146,6 @@ func testManagedInstalled(path string) tui.InstalledSkill {
 	return tui.InstalledSkill{
 		Target: tui.TargetCodex, Scope: tui.ScopeGlobal, Skill: testSkillRulesSelector,
 		Managed: tui.ManagedYes, Source: testSourceAgentRules, Path: path,
-	}
-}
-
-func testManagedUsage(source, skill, target, scope, projectPath, path string) tui.InstalledSkill {
-	return tui.InstalledSkill{
-		Source: source, Skill: skill, Managed: tui.ManagedYes,
-		Target: target, Scope: scope, ProjectPath: projectPath, Path: path,
 	}
 }
 
@@ -712,14 +705,16 @@ func TestDashboardRendersSectionNavigation(t *testing.T) {
 	for _, want := range []string{
 		"1 Installed",
 		"2 Skills",
-		"3 Usage",
-		"4 Sources",
-		"5 Targets",
-		"6 Update",
+		"3 Sources",
+		"4 Targets",
+		"5 Update",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected dashboard navigation to contain %q, got:\n%s", want, view)
 		}
+	}
+	if strings.Contains(view, "Usage") || strings.Contains(view, "6 Update") {
+		t.Fatalf("expected usage navigation and section 6 to be removed, got:\n%s", view)
 	}
 }
 
@@ -833,72 +828,6 @@ func TestParseInstalledTSV(t *testing.T) {
 	}
 }
 
-func TestParseInstalledUsageTSV(t *testing.T) {
-	input := strings.Join([]string{
-		core.InstalledUsageHeader,
-		strings.Join([]string{
-			testSourceAgentRules, testSkillRulesSelector, tui.TargetCodex, tui.ScopeProject, testProjectPath,
-			testProjectSkillsRoot, testProjectRulesPath,
-			testSourceRefMain, "git@example.com:rules.git", testCatalogSkillsPath, testHashABC,
-			testTimestampInstalled, testTimestampUsage,
-		}, "\t"),
-		"",
-	}, "\n")
-
-	rows, err := tui.ParseInstalledUsageTSV(input)
-	if err != nil {
-		t.Fatalf("tui.ParseInstalledUsageTSV returned error: %v", err)
-	}
-	if len(rows) != 1 {
-		t.Fatalf("expected 1 usage row, got %d", len(rows))
-	}
-	row := rows[0]
-	if row.Target != tui.TargetCodex || row.Scope != tui.ScopeProject || row.ProjectPath != testProjectPath || !row.RegistryOnly {
-		t.Fatalf("unexpected usage row: %#v", row)
-	}
-}
-
-func TestBuildUsageSummariesGroupsRowsBySkill(t *testing.T) {
-	rows := []tui.InstalledSkill{
-		{
-			Source: testSourceAgentRules, Skill: testSkillRulesSelector, Managed: tui.ManagedYes,
-			Target: tui.TargetCodex, Scope: tui.ScopeGlobal, ProjectPath: "-", UpdatedAt: testTimestampUsage,
-		},
-		{
-			Source: testSourceAgentRules, Skill: testSkillRulesSelector, Managed: tui.ManagedYes,
-			Target: tui.TargetCodex, Scope: tui.ScopeProject, ProjectPath: testProjectA,
-			UpdatedAt: "2026-05-05T02:00:00Z",
-		},
-		{
-			Source: testSourceAgentRules, Skill: testSkillRulesSelector, Managed: tui.ManagedYes,
-			Target: tui.TargetClaude, Scope: tui.ScopeProject, ProjectPath: testProjectB,
-			UpdatedAt: testTimestampLatest,
-		},
-		{
-			Source: testSourceAgentRules, Skill: testSkillGoProjectRules, Managed: tui.ManagedYes,
-			Target: tui.TargetCodex, Scope: tui.ScopeProject, ProjectPath: testProjectA,
-			UpdatedAt: testTimestampInstalled,
-		},
-	}
-
-	summaries := tui.BuildUsageSummaries(rows)
-	if len(summaries) != 2 {
-		t.Fatalf("expected 2 summaries, got %#v", summaries)
-	}
-	var rules tui.UsageSummary
-	for _, summary := range summaries {
-		if summary.Key == testQualifiedRules {
-			rules = summary
-		}
-	}
-	if rules.InstallCount != 3 ||
-		rules.ProjectCount != 2 ||
-		rules.TargetCount != 3 ||
-		rules.LatestUpdated != testTimestampLatest {
-		t.Fatalf("unexpected rules-selector summary: %#v", rules)
-	}
-}
-
 func TestMergeInstalledUsageRowsSkipsScannedDuplicates(t *testing.T) {
 	scanned := []tui.InstalledSkill{
 		{
@@ -932,261 +861,6 @@ func TestMergeInstalledUsageRowsSkipsScannedDuplicates(t *testing.T) {
 	}
 	if !rows[1].RegistryOnly || rows[1].Target != tui.TargetClaude {
 		t.Fatalf("expected usage-only claude row, got %#v", rows[1])
-	}
-}
-
-func TestUsageScreenShowsSummaryRows(t *testing.T) {
-	rows := []tui.InstalledSkill{
-		{
-			Source: testSourceAgentRules, Skill: testSkillRulesSelector, Managed: tui.ManagedYes,
-			Target: tui.TargetCodex, Scope: tui.ScopeGlobal, ProjectPath: "-", Path: testGlobalRulesPath,
-			UpdatedAt: testTimestampUsage,
-		},
-		{
-			Source: testSourceAgentRules, Skill: testSkillRulesSelector, Managed: tui.ManagedYes,
-			Target: tui.TargetCodex, Scope: tui.ScopeProject, ProjectPath: testProjectA,
-			Path: "/tmp/project-a/.agents/skills/rules-selector", UpdatedAt: "2026-05-05T02:00:00Z",
-		},
-		{
-			Source: testSourceAgentRules, Skill: testSkillRulesSelector, Managed: tui.ManagedYes,
-			Target: tui.TargetClaude, Scope: tui.ScopeProject, ProjectPath: testProjectB,
-			Path: "/tmp/project-b/.claude/skills/rules-selector", UpdatedAt: testTimestampLatest,
-		},
-	}
-	m := tui.InitialModel(".")
-	m.Loading = false
-	m.Width = 120
-	m.Height = 40
-	m.ViewMode = tui.ViewUsage
-	m.UsageRows = rows
-	m.UsageSummaries = tui.BuildUsageSummaries(rows)
-
-	view := stripANSI(m.View())
-	for _, want := range []string{
-		"Usage",
-		"Installs: 3",
-		"Skills: 1",
-		"Projects: 2",
-		testQualifiedRules,
-		"installs: 3",
-		"projects: 2",
-		"targets: 3",
-		"latest: 2026-05-05T03:00:00Z",
-	} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("expected usage screen to contain %q, got:\n%s", want, view)
-		}
-	}
-}
-
-func TestEnterOpensUsageDetails(t *testing.T) {
-	rows := []tui.InstalledSkill{
-		{
-			Source: testSourceAgentRules, Skill: testSkillRulesSelector, Managed: tui.ManagedYes,
-			Target: tui.TargetCodex, Scope: tui.ScopeGlobal, ProjectPath: "-", Path: testGlobalRulesPath,
-			ContentHash: "global-hash", UpdatedAt: testTimestampUsage,
-		},
-		{
-			Source: testSourceAgentRules, Skill: testSkillRulesSelector, Managed: tui.ManagedYes,
-			Target: tui.TargetGemini, Scope: tui.ScopeProject, ProjectPath: testProjectB,
-			Path: testProjectBGeminiPath, ContentHash: "project-hash",
-			UpdatedAt: testTimestampLatest,
-		},
-	}
-	m := tui.InitialModel(".")
-	m.Loading = false
-	m.Width = 120
-	m.Height = 40
-	m.ViewMode = tui.ViewUsage
-	m.UsageRows = rows
-	m.UsageSummaries = tui.BuildUsageSummaries(rows)
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = asModel(t, updated)
-	if m.ViewMode != tui.ViewUsageDetails {
-		t.Fatalf("expected usage details view, got %q", m.ViewMode)
-	}
-
-	view := stripANSI(m.View())
-	for _, want := range []string{
-		"Usage details",
-		testQualifiedRules,
-		"Installed in: 2",
-		"Projects: 1",
-		testLabelCodexGlobal,
-		"LOCAL PROJECT",
-		"Gemini project",
-		"Project root: /tmp/project-b",
-		"hash: project-hash",
-	} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("expected usage details to contain %q, got:\n%s", want, view)
-		}
-	}
-}
-
-func TestUsageUpdateArgsAndGlobalOnlyRefusal(t *testing.T) {
-	want := "usage update --projects agent-rules/rules-selector"
-	if got := tui.UsageUpdateArgsForKey(testQualifiedRules); strings.Join(got, " ") != want {
-		t.Fatalf("unexpected usage update args: %#v", got)
-	}
-
-	m := tui.InitialModel(".")
-	m.Loading = false
-	m.ViewMode = tui.ViewUsage
-	m.UsageRows = []tui.InstalledSkill{
-		testManagedUsage(testSourceAgentRules, testSkillRulesSelector, tui.TargetCodex, tui.ScopeGlobal, "-", testGlobalRulesPath),
-	}
-	m.UsageSummaries = tui.BuildUsageSummaries(m.UsageRows)
-
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
-	m = asModel(t, updated)
-	if cmd != nil || m.Busy {
-		t.Fatalf("global-only usage update should not start a command")
-	}
-	if !strings.Contains(m.Status, "has no recorded project installs") {
-		t.Fatalf("expected global-only refusal status, got %q", m.Status)
-	}
-}
-
-func TestUsageDetailsUpdateReturnsToDetailsAfterReload(t *testing.T) {
-	rows := []tui.InstalledSkill{
-		testManagedUsage(testSourceAgentRules, testSkillRulesSelector, tui.TargetCodex, tui.ScopeGlobal, "-", testGlobalRulesPath),
-		testManagedUsage(
-			testSourceAgentRules, testSkillRulesSelector, tui.TargetCodex, tui.ScopeProject,
-			testProjectA, "/tmp/project-a/.agents/skills/rules-selector",
-		),
-	}
-	m := tui.InitialModel(".")
-	m.Loading = false
-	m.Width = 120
-	m.Height = 40
-	m.ViewMode = tui.ViewUsage
-	m.UsageRows = rows
-	m.UsageSummaries = tui.BuildUsageSummaries(rows)
-
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = asModel(t, updated)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
-	m = asModel(t, updated)
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
-	m = asModel(t, updated)
-	if cmd == nil || !m.Busy || !m.ReturnToUsageDetails {
-		t.Fatalf("expected usage details update command and detail-return marker")
-	}
-
-	updated, _ = m.Update(tui.CommandDoneMsg{
-		Action: "Update usage",
-		Output: "Updated project usage: updated=0 unchanged=1 skipped=0 failed=0\n",
-	})
-	m = asModel(t, updated)
-	if !m.Loading || m.ViewMode != tui.ViewUsageDetails {
-		t.Fatalf("expected usage details to remain active during reload, got view=%q loading=%v", m.ViewMode, m.Loading)
-	}
-
-	updated, _ = m.Update(tui.UsageLoadedMsg{Rows: rows})
-	m = asModel(t, updated)
-	if m.ViewMode != tui.ViewUsageDetails {
-		t.Fatalf("expected usage details after reload, got %q", m.ViewMode)
-	}
-	if !strings.Contains(m.Status, "Updated project usage: updated=0 unchanged=1 skipped=0 failed=0") {
-		t.Fatalf("expected usage update summary to remain visible, got %q", m.Status)
-	}
-}
-
-func TestUsageFilterMatchesSkillSourceTargetProjectAndPath(t *testing.T) {
-	rows := []tui.InstalledSkill{
-		testManagedUsage(
-			testSourceAgentRules, testSkillGoProjectRules, tui.TargetCodex, tui.ScopeProject,
-			testProjectA, "/tmp/project-a/.agents/skills/go-project-rules",
-		),
-		testManagedUsage(
-			testSourceAgentRules, testSkillDocsProject, tui.TargetClaude, tui.ScopeProject,
-			testProjectB, "/tmp/project-b/.claude/skills/docs-project-rules",
-		),
-		testManagedUsage(tui.ScopeCustom, "workflow-rules", tui.TargetDirectory, tui.ScopeCustom, "-", "/tmp/custom/workflow-rules"),
-	}
-	m := tui.InitialModel(".")
-	m.Loading = false
-	m.ViewMode = tui.ViewUsage
-	m.UsageRows = rows
-	m.ApplyUsageFilter()
-	if len(m.UsageSummaries) != 3 {
-		t.Fatalf("expected all usage summaries without filter, got %#v", m.UsageSummaries)
-	}
-
-	m.UsageFilter = tui.TargetClaude
-	m.ApplyUsageFilter()
-	if len(m.UsageSummaries) != 1 || m.UsageSummaries[0].Key != "agent-rules/docs-project-rules" {
-		t.Fatalf("expected claude filter to keep docs project rules, got %#v", m.UsageSummaries)
-	}
-
-	m.UsageFilter = "project-a"
-	m.ApplyUsageFilter()
-	if len(m.UsageSummaries) != 1 || m.UsageSummaries[0].Key != testQualifiedGoRules {
-		t.Fatalf("expected project path filter to keep go project rules, got %#v", m.UsageSummaries)
-	}
-
-	m.UsageFilter = "custom/workflow"
-	m.ApplyUsageFilter()
-	if len(m.UsageSummaries) != 1 || m.UsageSummaries[0].Key != "custom/workflow-rules" {
-		t.Fatalf("expected source/skill filter to keep workflow rules, got %#v", m.UsageSummaries)
-	}
-}
-
-func TestUsageDetailsUpdateUsesHighlightedProjectLocation(t *testing.T) {
-	row := tui.InstalledSkill{
-		Source:      testSourceAgentRules,
-		Skill:       testSkillGoProjectRules,
-		Managed:     tui.ManagedYes,
-		Target:      tui.TargetClaude,
-		Scope:       tui.ScopeProject,
-		ProjectPath: testProjectB,
-		Path:        "/tmp/project-b/.claude/skills/go-project-rules",
-	}
-	want := []string{
-		testCommandUsage, commandUpdate, "--projects", testFlagTarget, tui.TargetClaude,
-		tui.FlagProject, testProjectB, testQualifiedGoRules,
-	}
-	if got := tui.UsageUpdateArgsForLocation(row); strings.Join(got, " ") != strings.Join(want, " ") {
-		t.Fatalf("expected targeted usage update args %#v, got %#v", want, got)
-	}
-}
-
-func TestUsageBulkUpdateArgsGroupsVisibleProjectRows(t *testing.T) {
-	rows := []tui.InstalledSkill{
-		{
-			Source: testSourceAgentRules, Skill: testSkillGoProjectRules, Managed: tui.ManagedYes,
-			Target: tui.TargetClaude, Scope: tui.ScopeProject, ProjectPath: testProjectA,
-		},
-		{
-			Source: testSourceAgentRules, Skill: testSkillDocsProject, Managed: tui.ManagedYes,
-			Target: tui.TargetClaude, Scope: tui.ScopeProject, ProjectPath: testProjectA,
-		},
-		{
-			Source: testSourceAgentRules, Skill: testSkillGoProjectRules, Managed: tui.ManagedYes,
-			Target: tui.TargetClaude, Scope: tui.ScopeProject, ProjectPath: testProjectA,
-		},
-		{
-			Source: testSourceAgentRules, Skill: testSkillGoProjectRules, Managed: tui.ManagedYes,
-			Target: tui.TargetCodex, Scope: tui.ScopeProject, ProjectPath: testProjectB,
-		},
-		{
-			Source: testSourceAgentRules, Skill: testSkillGoProjectRules, Managed: tui.ManagedYes,
-			Target: tui.TargetCodex, Scope: tui.ScopeGlobal, ProjectPath: "-",
-		},
-	}
-	groups := tui.UsageBulkUpdateArgGroups(rows)
-	got := make([]string, 0, len(groups))
-	for _, group := range groups {
-		got = append(got, strings.Join(group, " "))
-	}
-	want := []string{
-		"usage update --projects --target claude --project /tmp/project-a agent-rules/docs-project-rules agent-rules/go-project-rules",
-		"usage update --projects --target codex --project /tmp/project-b agent-rules/go-project-rules",
-	}
-	if strings.Join(got, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("unexpected bulk update groups:\nwant %#v\ngot  %#v", want, got)
 	}
 }
 
@@ -1260,7 +934,11 @@ func TestInstalledReloadClampsCursorToGroupedSummaries(t *testing.T) {
 	}})
 	m = asModel(t, updated)
 	if m.InstalledCursor != 0 || m.InstalledOffset != 0 {
-		t.Fatalf("expected reload to clamp cursor and offset to grouped summary, cursor=%d offset=%d", m.InstalledCursor, m.InstalledOffset)
+		t.Fatalf(
+			"expected reload to clamp cursor and offset to grouped summary, cursor=%d offset=%d",
+			m.InstalledCursor,
+			m.InstalledOffset,
+		)
 	}
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -1721,8 +1399,8 @@ func TestQuestionMarkOpensHelpOverlay(t *testing.T) {
 		"Help",
 		"1/2/3/4/5",
 		"left/right",
-		"u           update highlighted install, usage, or source entry",
-		"U           update visible Usage rows or all Sources",
+		"u           update highlighted install or source entry",
+		"U           update all Sources",
 		"s           update all Sources",
 		"x           uninstall",
 		"[M]         managed by Skillhub",
@@ -1750,15 +1428,15 @@ func TestLeftRightSwitchDashboardSections(t *testing.T) {
 	m.Loading = false
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
 	m = asModel(t, updated)
-	if m.ViewMode != tui.ViewUsage || !m.Loading {
-		t.Fatalf("expected right from installed to load usage section, got view=%q loading=%v", m.ViewMode, m.Loading)
+	if m.ViewMode != tui.ViewSources || !m.Loading {
+		t.Fatalf("expected right from skills to load sources section, got view=%q loading=%v", m.ViewMode, m.Loading)
 	}
 
 	m.Loading = false
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyLeft})
 	m = asModel(t, updated)
 	if m.ViewMode != tui.ViewSkills || !m.Loading {
-		t.Fatalf("expected left from usage to load skills section, got view=%q loading=%v", m.ViewMode, m.Loading)
+		t.Fatalf("expected left from sources to load skills section, got view=%q loading=%v", m.ViewMode, m.Loading)
 	}
 }
 
@@ -1780,6 +1458,34 @@ func TestNumberKeysUseInstalledFirstDashboardOrder(t *testing.T) {
 	m = asModel(t, updated)
 	if m.ViewMode != tui.ViewSkills || !m.Loading {
 		t.Fatalf("expected 2 to load skills section, got view=%q loading=%v", m.ViewMode, m.Loading)
+	}
+
+	m.Loading = false
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("3")})
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewSources || !m.Loading {
+		t.Fatalf("expected 3 to load sources section, got view=%q loading=%v", m.ViewMode, m.Loading)
+	}
+
+	m.Loading = false
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("4")})
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewTargets || !m.Loading {
+		t.Fatalf("expected 4 to load targets section, got view=%q loading=%v", m.ViewMode, m.Loading)
+	}
+
+	m.Loading = false
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("5")})
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewUpdate || !m.Loading {
+		t.Fatalf("expected 5 to load update section, got view=%q loading=%v", m.ViewMode, m.Loading)
+	}
+
+	m.Loading = false
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("6")})
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewUpdate || m.Loading {
+		t.Fatalf("expected 6 to be ignored, got view=%q loading=%v", m.ViewMode, m.Loading)
 	}
 }
 
@@ -2018,7 +1724,7 @@ func TestSmallHeightViewKeepsDashboardHeaderVisible(t *testing.T) {
 	m.ApplyFilter()
 
 	view := stripANSI(m.View())
-	for _, want := range []string{"Skillhub", "Sources: 2", "1 Installed", "2 Skills", "6 Update"} {
+	for _, want := range []string{"Skillhub", "Sources: 2", "1 Installed", "2 Skills", "5 Update"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected small-height view to keep dashboard text %q visible, got:\n%s", want, view)
 		}
@@ -2727,6 +2433,136 @@ func TestTargetSelectionScrollsToKeepCursorVisible(t *testing.T) {
 	}
 	if strings.Contains(view, "Agent 00") {
 		t.Fatalf("expected scrolled target view to hide the first row, got:\n%s", view)
+	}
+	if got := lipgloss.Height(view); got > m.Height {
+		t.Fatalf("expected target view to fit height %d, got %d lines:\n%s", m.Height, got, view)
+	}
+}
+
+func TestSkillsScrollKeepsCursorVisibleAtSmallHeight(t *testing.T) {
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.Width = 120
+	m.Height = 22
+	m.ViewMode = tui.ViewSkills
+	for i := 0; i < 7; i++ {
+		m.Skills = append(m.Skills, tui.Skill{
+			Source:      testSourceAgentRules,
+			Name:        fmt.Sprintf("skill-%02d", i),
+			Category:    "go",
+			Description: "Short skill description.",
+		})
+	}
+	m.ApplyFilter()
+
+	for i := 0; i < 5; i++ {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = asModel(t, updated)
+	}
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "›") || !strings.Contains(view, "skill-05") {
+		t.Fatalf("expected selected skill row to stay visible, got:\n%s", view)
+	}
+	if got := lipgloss.Height(view); got > m.Height {
+		t.Fatalf("expected skills view to fit height %d, got %d lines:\n%s", m.Height, got, view)
+	}
+}
+
+func TestInstalledDetailsScrollKeepsCursorVisibleAtSmallHeight(t *testing.T) {
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.Width = 120
+	m.Height = 24
+	m.ViewMode = tui.ViewInstalledDetails
+	m.InstalledDetailKey = testQualifiedRules
+	for i := 0; i < 6; i++ {
+		project := fmt.Sprintf("/tmp/project-%02d", i)
+		m.InstalledRows = append(m.InstalledRows, tui.InstalledSkill{
+			Source:      testSourceAgentRules,
+			Skill:       testSkillRulesSelector,
+			Managed:     tui.ManagedYes,
+			Target:      tui.TargetCodex,
+			Scope:       tui.ScopeProject,
+			ProjectPath: project,
+			Path:        project + "/.agents/skills/rules-selector",
+		})
+	}
+
+	for i := 0; i < 5; i++ {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = asModel(t, updated)
+	}
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "›") || !strings.Contains(view, "/tmp/project-05") {
+		t.Fatalf("expected selected installed detail row to stay visible, got:\n%s", view)
+	}
+	if got := lipgloss.Height(view); got > m.Height {
+		t.Fatalf("expected installed detail view to fit height %d, got %d lines:\n%s", m.Height, got, view)
+	}
+}
+
+func TestSourcesScrollKeepsCursorVisibleAtSmallHeight(t *testing.T) {
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.Width = 120
+	m.Height = 24
+	m.ViewMode = tui.ViewSources
+	for i := 0; i < 7; i++ {
+		m.Sources = append(m.Sources, tui.SourcePreset{
+			Name:     fmt.Sprintf("source-%02d", i),
+			Type:     testSourceTypeGit,
+			Status:   "fresh",
+			Ref:      testSourceRefMain,
+			Catalog:  testCatalogSkillsPath,
+			Location: fmt.Sprintf("/tmp/source-%02d", i),
+		})
+	}
+
+	for i := 0; i < 5; i++ {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = asModel(t, updated)
+	}
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "› source-05") {
+		t.Fatalf("expected selected source row to stay visible, got:\n%s", view)
+	}
+	if got := lipgloss.Height(view); got > m.Height {
+		t.Fatalf("expected sources view to fit height %d, got %d lines:\n%s", m.Height, got, view)
+	}
+}
+
+func TestSourceDefaultsScrollKeepsCursorVisibleAtSmallHeight(t *testing.T) {
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.Width = 120
+	m.Height = 18
+	m.ViewMode = tui.ViewDefaults
+	for i := 0; i < 12; i++ {
+		m.Defaults = append(m.Defaults, tui.SourcePreset{
+			Name:     fmt.Sprintf("source-%02d", i),
+			Type:     testSourceTypeGit,
+			Ref:      testSourceRefMain,
+			Location: fmt.Sprintf("/tmp/source-%02d", i),
+		})
+	}
+
+	for i := 0; i < 9; i++ {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = asModel(t, updated)
+	}
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "› source-09") {
+		t.Fatalf("expected selected default source row to stay visible, got:\n%s", view)
+	}
+	if strings.Contains(view, "source-00") {
+		t.Fatalf("expected default source view to scroll away from first row, got:\n%s", view)
+	}
+	if got := lipgloss.Height(view); got > m.Height {
+		t.Fatalf("expected default source view to fit height %d, got %d lines:\n%s", m.Height, got, view)
 	}
 }
 

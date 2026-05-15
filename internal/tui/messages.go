@@ -23,11 +23,6 @@ type installedLoadedMsg struct {
 	err  error
 }
 
-type usageLoadedMsg struct {
-	rows []InstalledSkill
-	err  error
-}
-
 type targetsLoadedMsg struct {
 	targets    []Target
 	detections []TargetDetection

@@ -210,20 +210,20 @@ The existing `install` command remains supported.
 In the TUI:
 
 ```text
-1/2/3/4/5/6 switch sections
+1/2/3/4/5 switch sections
 left/right switch sections
 j/k       move
 space     queue/unqueue skill for install
 enter     open highlighted details
-/         search skills or filter usage
+/         search skills
 a         queue all visible skills
 c         clear install queue
 d         open recommended source presets
 n         add custom source path or git URL
 t         open target paths
 i         install queued skills
-u         update highlighted install, usage, or source entry
-U         update all visible project usage entries, or all sources in Sources
+u         update highlighted install or source entry
+U         update all sources in Sources
 x         uninstall highlighted managed skill
 s         update all sources in Sources
 r         reload current section, or restore project lockfile in Update
@@ -232,7 +232,7 @@ q         quit
 ```
 
 The TUI opens as an installed-first dashboard with sections for installed
-skills, catalog skills, managed usage, sources, targets, and update commands.
+skills, catalog skills, sources, targets, and update commands.
 The Skills section keeps the readable category tree and green `[+]` install
 queue marker, and shows compact installed badges for managed skills whose
 target directory still exists. Press `i` after queueing skills to open the
@@ -241,16 +241,14 @@ assistants, review the target paths, then confirm. During install the TUI runs
 one skill-target step at a time and shows the current step, queue state,
 spinner, progress bar, and last result line.
 
-The Installed section lists managed and unmanaged `SKILL.md` directories grouped
-by target/scope. Press `u` to update managed skills for the highlighted
-target/scope, or `x` to uninstall the highlighted managed skill after
-confirmation. Unmanaged uninstall remains CLI-only with explicit `--force`.
-
-The Usage section reads the managed usage registry and groups installs by
-`source/skill`. Press `enter` to see every global, project, or custom-directory
-location for that skill. Press `/` to filter by source, skill, target, scope,
-project root, or install path. Press `u` to update the highlighted skill or
-location, and `U` to update all visible recorded project-scope installs.
+The Installed section lists managed and unmanaged `SKILL.md` directories
+grouped by skill and includes registry-backed project installs recorded by
+Skillhub. Press `enter` to see every global, project, or custom-directory
+location for that skill. Press `u` to update one highlighted managed location,
+or `x` to uninstall it after confirmation. Unmanaged uninstall remains CLI-only
+with explicit `--force`. Recorded project usage maintenance stays in the CLI
+through `skillhub installed usage update --projects` and
+`skillhub update --cascade`.
 
 The Sources section shows active source freshness, last sync time, cache path,
 configured ref/catalog/location, recommended presets, custom source entry, and
@@ -481,8 +479,6 @@ The current implementation is intentionally conservative. Useful next slices:
 
 - Import existing `.skillhub.json` metadata into `installed.tsv` so installs
   created before the usage registry can be managed without reinstalling.
-- Add richer TUI Usage manager actions such as source-level bulk operations,
-  saved filters, and dry-run summaries across recorded project installs.
 - Add real target adapters for more assistants after their current on-disk
   formats and supported paths are verified.
 - Add more concrete `skillhub recommend` language/framework providers and

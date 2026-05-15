@@ -111,23 +111,6 @@ func loadInstalled(repoRoot string) tea.Cmd {
 	}
 }
 
-func loadUsage(repoRoot string) tea.Cmd {
-	return func() tea.Msg {
-		backend, err := newBackend(repoRoot)
-		if err != nil {
-			return usageLoadedMsg{err: err}
-		}
-		rows, err := backend.ReadUsage("")
-		if err != nil {
-			return usageLoadedMsg{err: err}
-		}
-		tuiRows := tuiInstalled(rows)
-		markMissingInstalledPaths(tuiRows)
-		sortInstalledRows(tuiRows)
-		return usageLoadedMsg{rows: tuiRows}
-	}
-}
-
 func loadProjectLockStatus(repoRoot, projectDir string) tea.Cmd {
 	return func() tea.Msg {
 		projectPath := strings.TrimSpace(projectDir)
@@ -201,75 +184,6 @@ func installedUninstallArgsForRow(row InstalledSkill, projectDir string) []strin
 		args = append(args, flagProject, installedRowProjectDir(row, projectDir))
 	}
 	return args
-}
-
-func usageUpdateArgsForKey(key string) []string {
-	return []string{commandUsage, commandUpdate, flagProjects, key}
-}
-
-func usageUpdateArgsForLocation(row InstalledSkill) []string {
-	args := []string{commandUsage, commandUpdate, flagProjects}
-	if strings.TrimSpace(row.Target) != "" && row.Target != "-" {
-		args = append(args, flagTarget, row.Target)
-	}
-	if isProjectUsageRow(row) {
-		args = append(args, flagProject, row.ProjectPath)
-	}
-	return append(args, installedSkillKey(row))
-}
-
-func usageBulkUpdateArgGroups(rows []InstalledSkill) [][]string {
-	type groupKey struct {
-		target  string
-		project string
-	}
-	order := []groupKey{}
-	grouped := map[groupKey]map[string]bool{}
-	for _, row := range rows {
-		if !isProjectUsageRow(row) {
-			continue
-		}
-		key := groupKey{target: row.Target, project: row.ProjectPath}
-		if _, ok := grouped[key]; !ok {
-			grouped[key] = map[string]bool{}
-			order = append(order, key)
-		}
-		grouped[key][installedSkillKey(row)] = true
-	}
-
-	groups := make([][]string, 0, len(order))
-	for _, key := range order {
-		skills := make([]string, 0, len(grouped[key]))
-		for skill := range grouped[key] {
-			skills = append(skills, skill)
-		}
-		sort.Strings(skills)
-		args := make([]string, 0, 7+len(skills))
-		args = append(args, commandUsage, commandUpdate, flagProjects, flagTarget, key.target, flagProject, key.project)
-		args = append(args, skills...)
-		groups = append(groups, args)
-	}
-	return groups
-}
-
-func runUsageBulkUpdateCommand(repoRoot string, rows []InstalledSkill) tea.Cmd {
-	return func() tea.Msg {
-		groups := usageBulkUpdateArgGroups(rows)
-		var combined strings.Builder
-		for _, args := range groups {
-			output, err := runCoreInstalledCommand(repoRoot, args...)
-			if strings.TrimSpace(output) != "" {
-				_, _ = combined.WriteString(output)
-				if !strings.HasSuffix(output, "\n") {
-					_, _ = combined.WriteString("\n")
-				}
-			}
-			if err != nil {
-				return commandDoneMsg{action: actionUpdateUsage, output: combined.String(), err: err}
-			}
-		}
-		return commandDoneMsg{action: actionUpdateUsage, output: combined.String()}
-	}
 }
 
 func installedRowProjectDir(row InstalledSkill, fallback string) string {
@@ -842,14 +756,6 @@ func runCoreInstalledCommand(repoRoot string, args ...string) (string, error) {
 		opts := core.UninstallOptions{Skill: args[1]}
 		parseUninstallArgs(args[2:], &opts)
 		return backend.Uninstall(opts)
-	case commandUsage:
-		if len(args) >= 2 && args[1] == commandUpdate {
-			opts := core.UsageUpdateOptions{}
-			parseUsageUpdateArgs(args[2:], &opts)
-			summary, err := backend.UpdateUsage(opts)
-			return summary.Output, err
-		}
-		return "", errors.New("unsupported usage command")
 	default:
 		return "", fmt.Errorf("unsupported installed command: %s", args[0])
 	}
@@ -909,29 +815,6 @@ func parseUninstallArgs(args []string, opts *core.UninstallOptions) {
 			}
 		case "--force":
 			opts.Force = true
-		}
-	}
-}
-
-func parseUsageUpdateArgs(args []string, opts *core.UsageUpdateOptions) {
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case flagProjects:
-			opts.Projects = true
-		case flagTarget:
-			i++
-			if i < len(args) {
-				opts.Target = args[i]
-			}
-		case flagProject:
-			i++
-			if i < len(args) {
-				opts.Project = args[i]
-			}
-		case "-v", flagVerbose:
-			opts.Verbose = true
-		default:
-			opts.Filters = append(opts.Filters, args[i])
 		}
 	}
 }
@@ -1061,40 +944,6 @@ func parseInstalledTSV(input string) ([]InstalledSkill, error) {
 			ContentHash:    parts[7],
 			InstalledAt:    parts[8],
 			Path:           parts[9],
-		})
-	}
-	return rows, nil
-}
-
-func parseInstalledUsageTSV(input string) ([]InstalledSkill, error) {
-	lines := strings.Split(strings.TrimSpace(input), "\n")
-	if len(lines) == 0 || lines[0] != core.InstalledUsageHeader {
-		return nil, errors.New("unexpected installed usage TSV header")
-	}
-	rows := make([]InstalledSkill, 0, len(lines)-1)
-	for _, line := range lines[1:] {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		parts := strings.SplitN(line, "\t", 13)
-		if len(parts) != 13 {
-			return nil, fmt.Errorf("invalid installed usage TSV row: %q", line)
-		}
-		rows = append(rows, InstalledSkill{
-			Target:         parts[2],
-			Scope:          parts[3],
-			Skill:          parts[1],
-			Managed:        managedYes,
-			Source:         parts[0],
-			QualifiedSkill: parts[0] + "/" + parts[1],
-			ProjectPath:    parts[4],
-			TargetRoot:     parts[5],
-			InstalledPath:  parts[6],
-			ContentHash:    parts[10],
-			InstalledAt:    parts[11],
-			UpdatedAt:      parts[12],
-			Path:           parts[6],
-			RegistryOnly:   true,
 		})
 	}
 	return rows, nil

@@ -10,10 +10,6 @@ type installedSectionModel struct {
 	root model
 }
 
-type usageSectionModel struct {
-	root model
-}
-
 type targetsSectionModel struct {
 	root model
 }
@@ -28,10 +24,6 @@ func (m model) skillsSection() skillsSectionModel {
 
 func (m model) installedSectionModel() installedSectionModel {
 	return installedSectionModel{root: m}
-}
-
-func (m model) usageSection() usageSectionModel {
-	return usageSectionModel{root: m}
 }
 
 func (m model) targetsSection() targetsSectionModel {
@@ -72,22 +64,6 @@ func (s installedSectionModel) content(width int) string {
 
 func (s installedSectionModel) detailsContent(width int) string {
 	return s.root.installedDetailsContent(width)
-}
-
-func (s usageSectionModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	return s.root.updateUsageKey(msg)
-}
-
-func (s usageSectionModel) updateDetailsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	return s.root.updateUsageDetailsKey(msg)
-}
-
-func (s usageSectionModel) content(width int) string {
-	return s.root.usageContent(width)
-}
-
-func (s usageSectionModel) detailsContent(width int) string {
-	return s.root.usageDetailsContent(width)
 }
 
 func (s targetsSectionModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

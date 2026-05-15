@@ -28,10 +28,9 @@ const (
 
 	ViewSkills           = viewSkills
 	ViewInstalled        = viewInstalled
-	ViewUsage            = viewUsage
-	ViewUsageDetails     = viewUsageDetails
 	ViewSources          = viewSources
 	ViewUpdate           = viewUpdate
+	ViewDefaults         = viewDefaults
 	ViewAddSource        = viewAddSource
 	ViewDetails          = viewDetails
 	ViewInstalledDetails = viewInstalledDetails
@@ -59,43 +58,36 @@ type TestModel struct {
 
 	RepoRoot string
 
-	Skills         []Skill
-	Filtered       []int
-	Selected       map[string]bool
-	Sources        []SourcePreset
-	InstalledRows  []InstalledSkill
-	UsageRows      []InstalledSkill
-	UsageSummaries []UsageSummary
-	Defaults       []SourcePreset
-	Targets        []Target
-	TargetStats    map[string]TargetDetection
-	LockStatus     ProjectLockStatus
+	Skills        []Skill
+	Filtered      []int
+	Selected      map[string]bool
+	Sources       []SourcePreset
+	InstalledRows []InstalledSkill
+	Defaults      []SourcePreset
+	Targets       []Target
+	TargetStats   map[string]TargetDetection
+	LockStatus    ProjectLockStatus
 
 	Cursor                int
 	InstalledCursor       int
 	InstalledDetailCursor int
-	UsageCursor           int
-	UsageDetailCursor     int
 	SourceCursor          int
 	DefaultCursor         int
 	TargetCursor          int
 	Offset                int
 	InstalledOffset       int
 	InstalledDetailOffset int
-	UsageOffset           int
-	UsageDetailOffset     int
 	SourceOffset          int
+	DefaultOffset         int
 	TargetOffset          int
 	Width                 int
 	Height                int
 	BodyHeight            int
 	Search                string
-	UsageFilter           string
 	SourceInput           string
 	SourceNameInput       string
 	SourceField           int
 	SearchMode            bool
-	UsageFilterMode       bool
 	Loading               bool
 	LoadingSkills         bool
 	LoadingInstalled      bool
@@ -105,8 +97,6 @@ type TestModel struct {
 	ViewMode              string
 	PreviousViewMode      string
 	InstalledDetailKey    string
-	UsageDetailKey        string
-	ReturnToUsageDetails  bool
 	ReloadOnFinish        bool
 	PostReloadStatus      string
 	SpinnerFrame          int
@@ -141,11 +131,6 @@ type SourcesLoadedMsg struct {
 }
 
 type InstalledLoadedMsg struct {
-	Rows []InstalledSkill
-	Err  error
-}
-
-type UsageLoadedMsg struct {
 	Rows []InstalledSkill
 	Err  error
 }
@@ -197,12 +182,6 @@ func (m TestModel) View() string {
 func (m *TestModel) ApplyFilter() {
 	inner := m.innerModel()
 	inner.applyFilter()
-	*m = testModelFromModel(inner)
-}
-
-func (m *TestModel) ApplyUsageFilter() {
-	inner := m.innerModel()
-	inner.applyUsageFilter()
 	*m = testModelFromModel(inner)
 }
 
@@ -265,10 +244,6 @@ func ParseInstalledTSV(input string) ([]InstalledSkill, error) {
 	return parseInstalledTSV(input)
 }
 
-func ParseInstalledUsageTSV(input string) ([]InstalledSkill, error) {
-	return parseInstalledUsageTSV(input)
-}
-
 func ParseActiveSourcesTSV(input string) ([]SourcePreset, error) {
 	return parseSourcesTSV(input)
 }
@@ -285,24 +260,8 @@ func ParseTargetDetectionsTSV(input string) ([]TargetDetection, error) {
 	return parseTargetDetectionsTSV(input)
 }
 
-func BuildUsageSummaries(rows []InstalledSkill) []UsageSummary {
-	return buildUsageSummaries(rows)
-}
-
 func MergeInstalledUsageRows(scanned []InstalledSkill, usageRows []InstalledSkill) []InstalledSkill {
 	return mergeInstalledUsageRows(scanned, usageRows)
-}
-
-func UsageUpdateArgsForKey(key string) []string {
-	return usageUpdateArgsForKey(key)
-}
-
-func UsageUpdateArgsForLocation(row InstalledSkill) []string {
-	return usageUpdateArgsForLocation(row)
-}
-
-func UsageBulkUpdateArgGroups(rows []InstalledSkill) [][]string {
-	return usageBulkUpdateArgGroups(rows)
 }
 
 func InstallArgsForTargetChoice(choice InstallTargetChoice, projectDir string, names []string) []string {
@@ -357,43 +316,36 @@ func testModelFromModel(m model) TestModel {
 
 		RepoRoot: m.repoRoot,
 
-		Skills:         m.skills,
-		Filtered:       m.filtered,
-		Selected:       m.selected,
-		Sources:        m.sources,
-		InstalledRows:  m.installedRows,
-		UsageRows:      m.usageRows,
-		UsageSummaries: m.usageSummaries,
-		Defaults:       m.defaults,
-		Targets:        m.targets,
-		TargetStats:    m.targetStats,
-		LockStatus:     m.lockStatus,
+		Skills:        m.skills,
+		Filtered:      m.filtered,
+		Selected:      m.selected,
+		Sources:       m.sources,
+		InstalledRows: m.installedRows,
+		Defaults:      m.defaults,
+		Targets:       m.targets,
+		TargetStats:   m.targetStats,
+		LockStatus:    m.lockStatus,
 
 		Cursor:                m.cursor,
 		InstalledCursor:       m.installedCursor,
 		InstalledDetailCursor: m.installedDetailCursor,
-		UsageCursor:           m.usageCursor,
-		UsageDetailCursor:     m.usageDetailCursor,
 		SourceCursor:          m.sourceCursor,
 		DefaultCursor:         m.defaultCursor,
 		TargetCursor:          m.targetCursor,
 		Offset:                m.offset,
 		InstalledOffset:       m.installedOffset,
 		InstalledDetailOffset: m.installedDetailOffset,
-		UsageOffset:           m.usageOffset,
-		UsageDetailOffset:     m.usageDetailOffset,
 		SourceOffset:          m.sourceOffset,
+		DefaultOffset:         m.defaultOffset,
 		TargetOffset:          m.targetOffset,
 		Width:                 m.width,
 		Height:                m.height,
 		BodyHeight:            m.bodyHeight,
 		Search:                m.search,
-		UsageFilter:           m.usageFilter,
 		SourceInput:           m.sourceInput,
 		SourceNameInput:       m.sourceNameInput,
 		SourceField:           m.sourceField,
 		SearchMode:            m.searchMode,
-		UsageFilterMode:       m.usageFilterMode,
 		Loading:               m.loading,
 		LoadingSkills:         m.loadingSkills,
 		LoadingInstalled:      m.loadingInstalled,
@@ -403,8 +355,6 @@ func testModelFromModel(m model) TestModel {
 		ViewMode:              m.viewMode,
 		PreviousViewMode:      m.previousViewMode,
 		InstalledDetailKey:    m.installedDetailKey,
-		UsageDetailKey:        m.usageDetailKey,
-		ReturnToUsageDetails:  m.returnToUsageDetails,
 		ReloadOnFinish:        m.reloadOnFinish,
 		PostReloadStatus:      m.postReloadStatus,
 		SpinnerFrame:          m.spinnerFrame,
@@ -433,8 +383,6 @@ func (m TestModel) innerModel() model {
 	inner.selected = m.Selected
 	inner.sources = m.Sources
 	inner.installedRows = m.InstalledRows
-	inner.usageRows = m.UsageRows
-	inner.usageSummaries = m.UsageSummaries
 	inner.defaults = m.Defaults
 	inner.targets = m.Targets
 	inner.targetStats = m.TargetStats
@@ -443,28 +391,23 @@ func (m TestModel) innerModel() model {
 	inner.cursor = m.Cursor
 	inner.installedCursor = m.InstalledCursor
 	inner.installedDetailCursor = m.InstalledDetailCursor
-	inner.usageCursor = m.UsageCursor
-	inner.usageDetailCursor = m.UsageDetailCursor
 	inner.sourceCursor = m.SourceCursor
 	inner.defaultCursor = m.DefaultCursor
 	inner.targetCursor = m.TargetCursor
 	inner.offset = m.Offset
 	inner.installedOffset = m.InstalledOffset
 	inner.installedDetailOffset = m.InstalledDetailOffset
-	inner.usageOffset = m.UsageOffset
-	inner.usageDetailOffset = m.UsageDetailOffset
 	inner.sourceOffset = m.SourceOffset
+	inner.defaultOffset = m.DefaultOffset
 	inner.targetOffset = m.TargetOffset
 	inner.width = m.Width
 	inner.height = m.Height
 	inner.bodyHeight = m.BodyHeight
 	inner.search = m.Search
-	inner.usageFilter = m.UsageFilter
 	inner.sourceInput = m.SourceInput
 	inner.sourceNameInput = m.SourceNameInput
 	inner.sourceField = m.SourceField
 	inner.searchMode = m.SearchMode
-	inner.usageFilterMode = m.UsageFilterMode
 	inner.loading = m.Loading
 	inner.loadingSkills = m.LoadingSkills
 	inner.loadingInstalled = m.LoadingInstalled
@@ -474,8 +417,6 @@ func (m TestModel) innerModel() model {
 	inner.viewMode = m.ViewMode
 	inner.previousViewMode = m.PreviousViewMode
 	inner.installedDetailKey = m.InstalledDetailKey
-	inner.usageDetailKey = m.UsageDetailKey
-	inner.returnToUsageDetails = m.ReturnToUsageDetails
 	inner.reloadOnFinish = m.ReloadOnFinish
 	inner.postReloadStatus = m.PostReloadStatus
 	inner.spinnerFrame = m.SpinnerFrame
@@ -505,8 +446,6 @@ func toInnerMsg(msg tea.Msg) tea.Msg {
 		return sourcesLoadedMsg{sources: msg.Sources, err: msg.Err}
 	case InstalledLoadedMsg:
 		return installedLoadedMsg{rows: msg.Rows, err: msg.Err}
-	case UsageLoadedMsg:
-		return usageLoadedMsg{rows: msg.Rows, err: msg.Err}
 	case TargetsLoadedMsg:
 		return targetsLoadedMsg{targets: msg.Targets, detections: msg.Detections, err: msg.Err}
 	case LockStatusLoadedMsg:
@@ -532,8 +471,6 @@ func toExportMsg(msg tea.Msg) tea.Msg {
 		return SourcesLoadedMsg{Sources: msg.sources, Err: msg.err}
 	case installedLoadedMsg:
 		return InstalledLoadedMsg{Rows: msg.rows, Err: msg.err}
-	case usageLoadedMsg:
-		return UsageLoadedMsg{Rows: msg.rows, Err: msg.err}
 	case targetsLoadedMsg:
 		return TargetsLoadedMsg{Targets: msg.targets, Detections: msg.detections, Err: msg.err}
 	case lockStatusLoadedMsg:

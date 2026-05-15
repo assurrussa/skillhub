@@ -1,14 +1,24 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
-	"github.com/assurrussa/skillhub/internal/tui"
 	"github.com/spf13/cobra"
+
+	"github.com/assurrussa/skillhub/internal/core"
+	"github.com/assurrussa/skillhub/internal/tui"
+)
+
+const (
+	UseDefault   = "defaults"
+	UseList      = "list"
+	UseTargets   = "targets"
+	UseInstalled = "installed"
 )
 
 var repoFlag string
@@ -19,7 +29,7 @@ func NewRootCommand() *cobra.Command {
 		Short:         "Discover and install agent skills from registered sources",
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			repoRoot, err := resolveRepoRoot()
 			if err != nil {
 				return err
@@ -35,20 +45,20 @@ func NewRootCommand() *cobra.Command {
 		Short: "Manage skill sources",
 	}
 	sources.AddCommand(sourceListCommand())
-	sources.AddCommand(scriptCommand("sync [source-name]", "Sync all sources or one source", "scripts/sources.sh", []string{"sync"}, cobra.MaximumNArgs(1)))
+	sources.AddCommand(sourceSyncCommand())
 	sources.AddCommand(sourceAddCommand())
 	sources.AddCommand(sourceRemoveCommand())
 	sources.AddCommand(sourceDefaultsCommand())
 
 	targets := &cobra.Command{
-		Use:   "targets",
+		Use:   UseTargets,
 		Short: "List supported and planned install targets",
 	}
 	targets.AddCommand(targetListCommand())
 	targets.AddCommand(targetDetectCommand())
 
 	installed := &cobra.Command{
-		Use:   "installed",
+		Use:   UseInstalled,
 		Short: "Inspect installed skills",
 	}
 	installed.AddCommand(installedListCommand())
@@ -60,21 +70,24 @@ func NewRootCommand() *cobra.Command {
 		Use:   "skills",
 		Short: "List, search, and install skills",
 	}
-	skills.AddCommand(scriptCommand("list", "List available skills", "scripts/skills.sh", []string{"list"}, cobra.NoArgs))
-	skills.AddCommand(scriptCommand("search <query>", "Search available skills", "scripts/skills.sh", []string{"search"}, cobra.MinimumNArgs(1)))
+	skills.AddCommand(skillListCommand("list", "List available skills"))
+	skills.AddCommand(skillSearchCommand("search <query>", "Search available skills"))
 	skills.AddCommand(installCommand("install [<source>/]<skill-name>...", "Install selected skills"))
+	skills.AddCommand(restoreCommand("restore [--project <path>]", "Restore project skills from skills.lock.toml"))
 
 	root.AddCommand(sources, targets, installed, skills)
-	root.AddCommand(scriptCommand("list", "List available skills", "scripts/skills.sh", []string{"list"}, cobra.NoArgs))
-	root.AddCommand(scriptCommand("search <query>", "Search available skills", "scripts/skills.sh", []string{"search"}, cobra.MinimumNArgs(1)))
+	root.AddCommand(skillListCommand("list", "List available skills"))
+	root.AddCommand(skillSearchCommand("search <query>", "Search available skills"))
 	root.AddCommand(installCommand("install [<source>/]<skill-name>...", "Install selected skills"))
+	root.AddCommand(installCommand("add [<source>/]<skill-name>...", "Add selected skills"))
+	root.AddCommand(restoreCommand("restore [--project <path>]", "Restore project skills from skills.lock.toml"))
 	root.AddCommand(recommendCommand())
 	root.AddCommand(versionCommand())
 	root.AddCommand(updateCommand())
 	root.AddCommand(&cobra.Command{
 		Use:   "tui",
 		Short: "Open the interactive skill dashboard",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			repoRoot, err := resolveRepoRoot()
 			if err != nil {
 				return err
@@ -89,23 +102,53 @@ func NewRootCommand() *cobra.Command {
 func sourceListCommand() *cobra.Command {
 	var tsv bool
 	cmd := &cobra.Command{
-		Use:   "list",
+		Use:   UseList,
 		Short: "List configured skill sources",
 		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			repoRoot, err := resolveRepoRoot()
+			if err != nil {
+				return err
+			}
+			backend, err := core.NewDefault(repoRoot)
+			if err != nil {
+				return err
+			}
+			sources, err := backend.ListSources()
+			if err != nil {
+				return err
+			}
+			renderSources(cmd.OutOrStdout(), sources, tsv)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&tsv, "tsv", false, "print tab-separated output")
+	return cmd
+}
+
+func sourceSyncCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "sync [source-name]",
+		Short: "Sync all sources or one source",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			repoRoot, err := resolveRepoRoot()
 			if err != nil {
 				return err
 			}
-			scriptArgs := []string{"list"}
-			if tsv {
-				scriptArgs = append(scriptArgs, "--tsv")
+			backend, err := core.NewDefault(repoRoot)
+			if err != nil {
+				return err
 			}
-			return runScript(repoRoot, "scripts/sources.sh", scriptArgs...)
+			name := ""
+			if len(args) > 0 {
+				name = args[0]
+			}
+			output, err := backend.SyncSources(name)
+			_, _ = fmt.Fprint(cmd.OutOrStdout(), output)
+			return err
 		},
 	}
-	cmd.Flags().BoolVar(&tsv, "tsv", false, "print tab-separated output")
-	return cmd
 }
 
 func sourceAddCommand() *cobra.Command {
@@ -122,20 +165,19 @@ func sourceAddCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			scriptArgs := []string{"add", args[0]}
-			if name != "" {
-				scriptArgs = append(scriptArgs, "--name", name)
+			backend, err := core.NewDefault(repoRoot)
+			if err != nil {
+				return err
 			}
-			if sourceType != "" {
-				scriptArgs = append(scriptArgs, "--type", sourceType)
-			}
-			if ref != "" {
-				scriptArgs = append(scriptArgs, "--ref", ref)
-			}
-			if catalog != "" {
-				scriptArgs = append(scriptArgs, "--catalog", catalog)
-			}
-			return runScript(repoRoot, "scripts/sources.sh", scriptArgs...)
+			output, err := backend.AddSource(core.SourceAddOptions{
+				Location: args[0],
+				Name:     name,
+				Type:     sourceType,
+				Ref:      ref,
+				Catalog:  catalog,
+			})
+			_, _ = fmt.Fprint(cmd.OutOrStdout(), output)
+			return err
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "source name; defaults to basename of path or git URL")
@@ -155,37 +197,89 @@ func sourceRemoveCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runScript(repoRoot, "scripts/sources.sh", "remove", args[0])
+			backend, err := core.NewDefault(repoRoot)
+			if err != nil {
+				return err
+			}
+			output, err := backend.RemoveSource(args[0])
+			_, _ = fmt.Fprint(cmd.OutOrStdout(), output)
+			return err
 		},
 	}
 }
 
 func sourceDefaultsCommand() *cobra.Command {
 	defaults := &cobra.Command{
-		Use:   "defaults",
-		Short: "List and add recommended source presets",
+		Use:     UseDefault,
+		Aliases: []string{"default"},
+		Short:   "List and add recommended source presets",
 	}
-	defaults.AddCommand(scriptCommand("list", "List recommended source presets", "scripts/sources.sh", []string{"defaults", "list"}, cobra.NoArgs))
-	defaults.AddCommand(scriptCommand("add <source-name>", "Add a recommended source preset", "scripts/sources.sh", []string{"defaults", "add"}, cobra.ExactArgs(1)))
+	var tsv bool
+	list := &cobra.Command{
+		Use:   UseList,
+		Short: "List recommended source presets",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			repoRoot, err := resolveRepoRoot()
+			if err != nil {
+				return err
+			}
+			backend, err := core.NewDefault(repoRoot)
+			if err != nil {
+				return err
+			}
+			sources, err := backend.ListDefaultSources()
+			if err != nil {
+				return err
+			}
+			renderSources(cmd.OutOrStdout(), sources, tsv)
+			return nil
+		},
+	}
+	list.Flags().BoolVar(&tsv, "tsv", false, "print tab-separated output")
+	defaults.AddCommand(list)
+	defaults.AddCommand(&cobra.Command{
+		Use:   "add <source-name>",
+		Short: "Add a recommended source preset",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repoRoot, err := resolveRepoRoot()
+			if err != nil {
+				return err
+			}
+			backend, err := core.NewDefault(repoRoot)
+			if err != nil {
+				return err
+			}
+			output, err := backend.AddDefaultSource(args[0])
+			_, _ = fmt.Fprint(cmd.OutOrStdout(), output)
+			return err
+		},
+	})
 	return defaults
 }
 
 func targetListCommand() *cobra.Command {
 	var tsv bool
 	cmd := &cobra.Command{
-		Use:   "list",
+		Use:   UseList,
 		Short: "List install targets",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			repoRoot, err := resolveRepoRoot()
 			if err != nil {
 				return err
 			}
-			scriptArgs := []string{"list"}
-			if tsv {
-				scriptArgs = append(scriptArgs, "--tsv")
+			backend, err := core.NewDefault(repoRoot)
+			if err != nil {
+				return err
 			}
-			return runScript(repoRoot, "scripts/targets.sh", scriptArgs...)
+			targets, err := backend.ListTargets()
+			if err != nil {
+				return err
+			}
+			renderTargets(cmd.OutOrStdout(), targets, tsv)
+			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&tsv, "tsv", false, "print tab-separated output")
@@ -199,19 +293,21 @@ func targetDetectCommand() *cobra.Command {
 		Use:   "detect",
 		Short: "Show resolved paths for supported install targets",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			repoRoot, err := resolveRepoRoot()
 			if err != nil {
 				return err
 			}
-			scriptArgs := []string{"detect"}
-			if tsv {
-				scriptArgs = append(scriptArgs, "--tsv")
+			backend, err := core.NewDefault(repoRoot)
+			if err != nil {
+				return err
 			}
-			if cmd.Flags().Changed("project") {
-				scriptArgs = append(scriptArgs, "--project", project)
+			detections, err := backend.DetectTargets(project)
+			if err != nil {
+				return err
 			}
-			return runScript(repoRoot, "scripts/targets.sh", scriptArgs...)
+			renderTargetDetections(cmd.OutOrStdout(), detections, tsv)
+			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&tsv, "tsv", false, "print tab-separated output")
@@ -229,28 +325,26 @@ func installedListCommand() *cobra.Command {
 		Use:   "list",
 		Short: "List installed skills for a target",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			repoRoot, err := resolveRepoRoot()
 			if err != nil {
 				return err
 			}
-			scriptArgs := []string{"list"}
-			if cmd.Flags().Changed("target") {
-				scriptArgs = append(scriptArgs, "--target", target)
+			backend, err := core.NewDefault(repoRoot)
+			if err != nil {
+				return err
 			}
-			if cmd.Flags().Changed("scope") {
-				scriptArgs = append(scriptArgs, "--scope", scope)
+			rows, err := backend.ListInstalled(core.InstalledListOptions{
+				Target:  target,
+				Scope:   scope,
+				Project: project,
+				Dir:     dir,
+			})
+			if err != nil {
+				return err
 			}
-			if cmd.Flags().Changed("project") {
-				scriptArgs = append(scriptArgs, "--project", project)
-			}
-			if cmd.Flags().Changed("dir") {
-				scriptArgs = append(scriptArgs, "--dir", dir)
-			}
-			if tsv {
-				scriptArgs = append(scriptArgs, "--tsv")
-			}
-			return runScript(repoRoot, "scripts/installed.sh", scriptArgs...)
+			renderInstalled(cmd.OutOrStdout(), rows, tsv)
+			return nil
 		},
 	}
 	cmd.Flags().StringVar(&target, "target", "", "install target id; defaults to codex")
@@ -271,28 +365,24 @@ func installedUpdateCommand() *cobra.Command {
 		Use:   "update",
 		Short: "Update managed installed skills for a target",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			repoRoot, err := resolveRepoRoot()
 			if err != nil {
 				return err
 			}
-			scriptArgs := []string{"update"}
-			if cmd.Flags().Changed("target") {
-				scriptArgs = append(scriptArgs, "--target", target)
+			backend, err := core.NewDefault(repoRoot)
+			if err != nil {
+				return err
 			}
-			if cmd.Flags().Changed("scope") {
-				scriptArgs = append(scriptArgs, "--scope", scope)
-			}
-			if cmd.Flags().Changed("project") {
-				scriptArgs = append(scriptArgs, "--project", project)
-			}
-			if cmd.Flags().Changed("dir") {
-				scriptArgs = append(scriptArgs, "--dir", dir)
-			}
-			if verbose {
-				scriptArgs = append(scriptArgs, "--verbose")
-			}
-			return runScript(repoRoot, "scripts/installed.sh", scriptArgs...)
+			summary, err := backend.UpdateInstalled(core.InstalledUpdateOptions{
+				Target:  target,
+				Scope:   scope,
+				Project: project,
+				Dir:     dir,
+				Verbose: verbose,
+			})
+			_, _ = fmt.Fprint(cmd.OutOrStdout(), summary.Output)
+			return err
 		},
 	}
 	cmd.Flags().StringVar(&target, "target", "", "install target id; defaults to codex")
@@ -318,23 +408,20 @@ func installedUninstallCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			scriptArgs := []string{"uninstall", args[0]}
-			if cmd.Flags().Changed("target") {
-				scriptArgs = append(scriptArgs, "--target", target)
+			backend, err := core.NewDefault(repoRoot)
+			if err != nil {
+				return err
 			}
-			if cmd.Flags().Changed("scope") {
-				scriptArgs = append(scriptArgs, "--scope", scope)
-			}
-			if cmd.Flags().Changed("project") {
-				scriptArgs = append(scriptArgs, "--project", project)
-			}
-			if cmd.Flags().Changed("dir") {
-				scriptArgs = append(scriptArgs, "--dir", dir)
-			}
-			if force {
-				scriptArgs = append(scriptArgs, "--force")
-			}
-			return runScript(repoRoot, "scripts/installed.sh", scriptArgs...)
+			output, err := backend.Uninstall(core.UninstallOptions{
+				Skill:   args[0],
+				Target:  target,
+				Scope:   scope,
+				Project: project,
+				Dir:     dir,
+				Force:   force,
+			})
+			_, _ = fmt.Fprint(cmd.OutOrStdout(), output)
+			return err
 		},
 	}
 	cmd.Flags().StringVar(&target, "target", "", "install target id; defaults to codex")
@@ -356,12 +443,20 @@ func installedUsageCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			scriptArgs := []string{"usage"}
-			scriptArgs = append(scriptArgs, args...)
-			if tsv {
-				scriptArgs = append(scriptArgs, "--tsv")
+			backend, err := core.NewDefault(repoRoot)
+			if err != nil {
+				return err
 			}
-			return runScript(repoRoot, "scripts/installed.sh", scriptArgs...)
+			filter := ""
+			if len(args) > 0 {
+				filter = args[0]
+			}
+			rows, err := backend.ReadUsage(filter)
+			if err != nil {
+				return err
+			}
+			renderUsage(cmd.OutOrStdout(), rows, tsv)
+			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&tsv, "tsv", false, "print tab-separated output")
@@ -383,21 +478,19 @@ func installedUsageUpdateCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			scriptArgs := []string{"usage", "update"}
-			if projects {
-				scriptArgs = append(scriptArgs, "--projects")
+			backend, err := core.NewDefault(repoRoot)
+			if err != nil {
+				return err
 			}
-			if cmd.Flags().Changed("target") {
-				scriptArgs = append(scriptArgs, "--target", target)
-			}
-			if cmd.Flags().Changed("project") {
-				scriptArgs = append(scriptArgs, "--project", project)
-			}
-			scriptArgs = append(scriptArgs, args...)
-			if verbose {
-				scriptArgs = append(scriptArgs, "--verbose")
-			}
-			return runScript(repoRoot, "scripts/installed.sh", scriptArgs...)
+			summary, err := backend.UpdateUsage(core.UsageUpdateOptions{
+				Projects: projects,
+				Target:   target,
+				Project:  project,
+				Filters:  args,
+				Verbose:  verbose,
+			})
+			_, _ = fmt.Fprint(cmd.OutOrStdout(), summary.Output)
+			return err
 		},
 	}
 	cmd.Flags().BoolVar(&projects, "projects", false, "update project-scope installs recorded in usage registry")
@@ -414,19 +507,25 @@ func recommendCommand() *cobra.Command {
 		Use:   "recommend",
 		Short: "Recommend a minimal skill set for a project",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			repoRoot, err := resolveRepoRoot()
 			if err != nil {
 				return err
 			}
-			scriptArgs := []string{}
-			if cmd.Flags().Changed("project") {
-				scriptArgs = append(scriptArgs, "--project", project)
+			backend, err := core.NewDefault(repoRoot)
+			if err != nil {
+				return err
 			}
-			if tsv {
-				scriptArgs = append(scriptArgs, "--tsv")
+			rows, err := backend.Recommend(core.RecommendOptions{Project: project})
+			if err != nil {
+				return err
 			}
-			return runScript(repoRoot, "scripts/recommend.sh", scriptArgs...)
+			projectLabel := project
+			if projectLabel == "" {
+				projectLabel, _ = backend.ProjectDir("")
+			}
+			renderRecommend(cmd.OutOrStdout(), rows, projectLabel, tsv)
+			return nil
 		},
 	}
 	cmd.Flags().StringVar(&project, "project", "", "project directory to analyze; defaults to caller working directory")
@@ -434,19 +533,64 @@ func recommendCommand() *cobra.Command {
 	return cmd
 }
 
-func scriptCommand(use, short, script string, prefix []string, args cobra.PositionalArgs) *cobra.Command {
-	return &cobra.Command{
+func skillListCommand(use, short string) *cobra.Command {
+	var tsv bool
+	cmd := &cobra.Command{
 		Use:   use,
 		Short: short,
-		Args:  args,
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			repoRoot, err := resolveRepoRoot()
+			if err != nil {
+				return err
+			}
+			backend, err := core.NewDefault(repoRoot)
+			if err != nil {
+				return err
+			}
+			skills, warning, err := backend.ListSkills("")
+			if warning != "" {
+				_, _ = fmt.Fprint(cmd.ErrOrStderr(), warning)
+			}
+			if err != nil {
+				return err
+			}
+			renderSkills(cmd.OutOrStdout(), skills, tsv)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&tsv, "tsv", false, "print tab-separated output")
+	return cmd
+}
+
+func skillSearchCommand(use, short string) *cobra.Command {
+	var tsv bool
+	cmd := &cobra.Command{
+		Use:   use,
+		Short: short,
+		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			repoRoot, err := resolveRepoRoot()
 			if err != nil {
 				return err
 			}
-			return runScript(repoRoot, script, append(prefix, args...)...)
+			backend, err := core.NewDefault(repoRoot)
+			if err != nil {
+				return err
+			}
+			skills, warning, err := backend.ListSkills(strings.Join(args, " "))
+			if warning != "" {
+				_, _ = fmt.Fprint(cmd.ErrOrStderr(), warning)
+			}
+			if err != nil {
+				return err
+			}
+			renderSkills(cmd.OutOrStdout(), skills, tsv)
+			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&tsv, "tsv", false, "print tab-separated output")
+	return cmd
 }
 
 func installCommand(use, short string) *cobra.Command {
@@ -461,7 +605,7 @@ func installCommand(use, short string) *cobra.Command {
 		Args: func(cmd *cobra.Command, args []string) error {
 			if all {
 				if len(args) != 0 {
-					return fmt.Errorf("--all cannot be combined with skill names")
+					return errors.New("--all cannot be combined with skill names")
 				}
 				return nil
 			}
@@ -472,26 +616,20 @@ func installCommand(use, short string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			scriptArgs := []string{"install"}
-			if all {
-				scriptArgs = append(scriptArgs, "--all")
+			backend, err := core.NewDefault(repoRoot)
+			if err != nil {
+				return err
 			}
-			if cmd.Flags().Changed("target") {
-				scriptArgs = append(scriptArgs, "--target", target)
-			}
-			if cmd.Flags().Changed("scope") {
-				scriptArgs = append(scriptArgs, "--scope", scope)
-			}
-			if cmd.Flags().Changed("project") {
-				scriptArgs = append(scriptArgs, "--project", project)
-			}
-			if cmd.Flags().Changed("dir") {
-				scriptArgs = append(scriptArgs, "--dir", dir)
-			}
-			if !all {
-				scriptArgs = append(scriptArgs, args...)
-			}
-			return runScript(repoRoot, "scripts/skills.sh", scriptArgs...)
+			output, err := backend.Install(core.InstallOptions{
+				All:     all,
+				Names:   args,
+				Target:  target,
+				Scope:   scope,
+				Project: project,
+				Dir:     dir,
+			})
+			_, _ = fmt.Fprint(cmd.OutOrStdout(), output)
+			return err
 		},
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "install all cataloged skills")
@@ -502,22 +640,60 @@ func installCommand(use, short string) *cobra.Command {
 	return cmd
 }
 
-func runScript(repoRoot, script string, args ...string) error {
-	scriptPath := filepath.Join(repoRoot, script)
-	cmd := exec.Command("sh", append([]string{scriptPath}, args...)...)
-	cmd.Dir = repoRoot
-	cmd.Env = os.Environ()
-	if os.Getenv("SKILLHUB_CALLER_CWD") == "" {
-		callerCwd, err := os.Getwd()
-		if err != nil {
-			callerCwd = "."
-		}
-		cmd.Env = append(cmd.Env, "SKILLHUB_CALLER_CWD="+callerCwd)
+func restoreCommand(use, short string) *cobra.Command {
+	var project string
+	var check bool
+	var tsv bool
+	var verbose bool
+	cmd := &cobra.Command{
+		Use:   use,
+		Short: short,
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			repoRoot, err := resolveRepoRoot()
+			if err != nil {
+				return err
+			}
+			backend, err := core.NewDefault(repoRoot)
+			if err != nil {
+				return err
+			}
+			if tsv {
+				summary, err := backend.Restore(core.RestoreOptions{Project: project, Check: true, Verbose: verbose})
+				renderRestoreRows(cmd.OutOrStdout(), summary.Rows)
+				return err
+			}
+			summary, err := backend.Restore(core.RestoreOptions{Project: project, Check: check, Verbose: verbose})
+			if len(summary.Rows) == 0 {
+				projectPath, _ := backend.ProjectDir(project)
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(),
+					"No project lockfile found: %s\n",
+					filepath.Join(projectPath, "skills.lock.toml"))
+				return err
+			}
+			if verbose {
+				for _, row := range summary.Rows {
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s %s/%s %s: %s\n",
+						row.Status, row.Source, row.Skill, row.Target, row.Reason)
+				}
+			}
+			if check {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(),
+					"Project lockfile check: missing=%d changed=%d unchanged=%d skipped=%d failed=%d\n",
+					summary.Installed, summary.Updated, summary.Unchanged, summary.Skipped, summary.Failed)
+			} else {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(),
+					"Restored project skills: installed=%d updated=%d unchanged=%d skipped=%d failed=%d\n",
+					summary.Installed, summary.Updated, summary.Unchanged, summary.Skipped, summary.Failed)
+			}
+			return err
+		},
 	}
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-	return cmd.Run()
+	cmd.Flags().StringVar(&project, "project", "", "project directory containing skills.lock.toml")
+	cmd.Flags().BoolVar(&check, "check", false, "check lockfile status without mutating project skills")
+	cmd.Flags().BoolVar(&tsv, "tsv", false, "print tab-separated restore status")
+	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "print per-skill restore details")
+	return cmd
 }
 
 func resolveRepoRoot() (string, error) {
@@ -532,7 +708,7 @@ func resolveRepoRoot() (string, error) {
 			return root, nil
 		}
 	}
-	return "", fmt.Errorf("skillhub repository not found; run from the checkout or set SKILLHUB_REPO")
+	return "", errors.New("skillhub repository not found; run from the checkout or set SKILLHUB_REPO")
 }
 
 func cleanRepoRoot(path string) (string, error) {
@@ -562,18 +738,182 @@ func findRepoRoot(start string) (string, bool) {
 
 func hasRepoFiles(dir string) bool {
 	required := []string{
+		"go.mod",
+		filepath.Join("cmd", "skillhub", "main.go"),
 		filepath.Join("defaults", "sources.tsv"),
 		filepath.Join("targets", "targets.tsv"),
-		filepath.Join("scripts", "skills.sh"),
-		filepath.Join("scripts", "sources.sh"),
-		filepath.Join("scripts", "installed.sh"),
-		filepath.Join("scripts", "targets.sh"),
-		filepath.Join("scripts", "recommend.sh"),
 	}
 	for _, rel := range required {
+		// #nosec G703 -- rel comes from the fixed repository file list above.
 		if _, err := os.Stat(filepath.Join(dir, rel)); err != nil {
 			return false
 		}
 	}
 	return true
+}
+
+func renderSources(out io.Writer, sources []core.Source, tsv bool) {
+	if tsv {
+		_, _ = fmt.Fprintln(out, core.SourcesHeader)
+		for _, row := range sources {
+			_, _ = fmt.Fprintf(out, "%s\t%s\t%s\t%s\t%s\n", row.Name, row.Type, row.Location, row.Ref, row.Catalog)
+		}
+		return
+	}
+	_, _ = fmt.Fprintf(out, "%-20s %-8s %-48s %-12s %s\n",
+		"name", "type", "location", "ref", "catalog")
+	_, _ = fmt.Fprintf(out, "%-20s %-8s %-48s %-12s %s\n",
+		"--------------------", "--------", "------------------------------------------------", "------------", "-------")
+	for _, row := range sources {
+		_, _ = fmt.Fprintf(out, "%-20s %-8s %-48s %-12s %s\n", row.Name, row.Type, row.Location, row.Ref, row.Catalog)
+	}
+	if len(sources) == 0 {
+		_, _ = fmt.Fprintln(out, "No sources configured. Run: skillhub sources defaults list")
+	}
+}
+
+func renderTargets(out io.Writer, targets []core.Target, tsv bool) {
+	if tsv {
+		_, _ = fmt.Fprintln(out, core.TargetsHeader)
+		for _, row := range targets {
+			_, _ = fmt.Fprintf(out, "%s\t%s\t%s\t%s\t%s\n", row.ID, row.Label, row.Status, row.Adapter, row.Description)
+		}
+		return
+	}
+	_, _ = fmt.Fprintf(out,
+		"%-14s %-12s %-10s %-10s %s\n",
+		"id", "label", "status", "adapter", "description")
+	_, _ = fmt.Fprintf(out,
+		"%-14s %-12s %-10s %-10s %s\n",
+		"--------------", "------------", "----------", "----------", "-----------")
+	for _, row := range targets {
+		_, _ = fmt.Fprintf(out, "%-14s %-12s %-10s %-10s %s\n", row.ID, row.Label, row.Status, row.Adapter, row.Description)
+	}
+}
+
+func renderTargetDetections(out io.Writer, rows []core.TargetDetection, tsv bool) {
+	if tsv {
+		_, _ = fmt.Fprintln(out, core.TargetDetectionsHeader)
+		for _, row := range rows {
+			_, _ = fmt.Fprintf(out,
+				"%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				row.Target, row.Scope, row.Status, row.Path, row.Exists, row.Skills, row.Managed)
+		}
+		return
+	}
+	_, _ = fmt.Fprintf(out,
+		"%-12s %-8s %-10s %-6s %-6s %-7s %s\n",
+		"target", "scope", "status", "exists", "skills", "managed", "path")
+	_, _ = fmt.Fprintf(out,
+		"%-12s %-8s %-10s %-6s %-6s %-7s %s\n",
+		"------------", "--------", "----------", "------", "------", "-------", "----")
+	for _, row := range rows {
+		_, _ = fmt.Fprintf(out,
+			"%-12s %-8s %-10s %-6s %-6s %-7s %s\n",
+			row.Target, row.Scope, row.Status, row.Exists, row.Skills, row.Managed, row.Path)
+	}
+}
+
+func renderSkills(out io.Writer, skills []core.Skill, tsv bool) {
+	if tsv {
+		_, _ = fmt.Fprintln(out, core.SkillsHeader)
+		for _, row := range skills {
+			_, _ = fmt.Fprintf(out, "%s\t%s\t%s\t%s\t%s\n", row.Source, row.Name, row.Category, row.Triggers, row.Description)
+		}
+		return
+	}
+	_, _ = fmt.Fprintf(out, "%-20s %-28s %-16s %s\n", "source", "name", "category", "description")
+	_, _ = fmt.Fprintf(out,
+		"%-20s %-28s %-16s %s\n",
+		"--------------------", "----------------------------", "----------------", "-----------")
+	for _, row := range skills {
+		_, _ = fmt.Fprintf(out, "%-20s %-28s %-16s %s\n", row.Source, row.Name, row.Category, row.Description)
+	}
+}
+
+func renderInstalled(out io.Writer, rows []core.InstalledSkill, tsv bool) {
+	if tsv {
+		_, _ = fmt.Fprintln(out, core.InstalledHeader)
+		for _, row := range rows {
+			_, _ = fmt.Fprintf(out, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				row.Target, row.Scope, row.Skill, row.Managed, row.Source,
+				row.QualifiedSkill, row.InstalledPath, row.ContentHash, row.InstalledAt, row.Path)
+		}
+		return
+	}
+	_, _ = fmt.Fprintf(out, "%-12s %-8s %-28s %-8s %-20s %s\n", "target", "scope", "skill", "managed", "source", "path")
+	_, _ = fmt.Fprintf(out,
+		"%-12s %-8s %-28s %-8s %-20s %s\n",
+		"------------", "--------", "----------------------------", "--------", "--------------------", "----")
+	for _, row := range rows {
+		_, _ = fmt.Fprintf(out, "%-12s %-8s %-28s %-8s %-20s %s\n", row.Target, row.Scope, row.Skill, row.Managed, row.Source, row.Path)
+	}
+}
+
+func renderUsage(out io.Writer, rows []core.InstalledSkill, tsv bool) {
+	if tsv {
+		_, _ = fmt.Fprintln(out, core.InstalledUsageHeader)
+		for _, row := range rows {
+			_, _ = fmt.Fprintf(out, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				row.Source, row.Skill, row.Target, row.Scope, row.ProjectPath, row.TargetRoot,
+				row.InstalledPath, row.SourceRef, row.SourceLocation, row.Catalog,
+				row.ContentHash, row.InstalledAt, row.UpdatedAt)
+		}
+		return
+	}
+	_, _ = fmt.Fprintf(out, "%-20s %-28s %-10s %-8s %-32s %s\n",
+		"source", "skill", "target", "scope", "project", "installed_path")
+	_, _ = fmt.Fprintf(out, "%-20s %-28s %-10s %-8s %-32s %s\n",
+		"--------------------", "----------------------------", "----------", "--------",
+		"--------------------------------", "--------------")
+	if len(rows) == 0 {
+		_, _ = fmt.Fprintln(out, "No managed skill usage recorded.")
+		return
+	}
+	for _, row := range rows {
+		_, _ = fmt.Fprintf(out, "%-20s %-28s %-10s %-8s %-32s %s\n",
+			row.Source, row.Skill, row.Target, row.Scope, row.ProjectPath, row.InstalledPath)
+	}
+}
+
+func renderRestoreRows(out io.Writer, rows []core.RestoreRow) {
+	_, _ = fmt.Fprintln(out, core.RestoreCheckHeader)
+	for _, row := range rows {
+		_, _ = fmt.Fprintf(out, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			row.Source, row.Skill, row.Target, row.Status, row.InstalledPath, row.ContentHash, row.Reason)
+	}
+}
+
+func renderRecommend(out io.Writer, rows []core.RecommendRow, project string, tsv bool) {
+	if tsv {
+		_, _ = fmt.Fprintln(out, core.RecommendHeader)
+		for _, row := range rows {
+			_, _ = fmt.Fprintf(out, "%s\t%s\t%s\t%s\n", row.Source, row.Skill, row.Reason, row.InstallArg)
+		}
+		return
+	}
+	if len(rows) == 0 {
+		if project == "" {
+			project = "."
+		}
+		_, _ = fmt.Fprintf(out, "No shared skills recommended for %s.\n", project)
+		_, _ = fmt.Fprintln(out, "Reason: no supported project signals matched the active source catalog.")
+		return
+	}
+	_, _ = fmt.Fprintf(out, "Recommended shared skills for %s:\n", project)
+	for _, row := range rows {
+		_, _ = fmt.Fprintf(out, "- %s/%s (score %d): %s\n", row.Source, row.Skill, row.Score, row.Reason)
+	}
+	_, _ = fmt.Fprintln(out, "\nInstall:")
+	args := make([]string, 0, len(rows))
+	for _, row := range rows {
+		args = append(args, row.InstallArg)
+	}
+	_, _ = fmt.Fprintf(out,
+		"skillhub install --target codex --scope project --project %s %s\n",
+		shellQuote(project), strings.Join(args, " "))
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }

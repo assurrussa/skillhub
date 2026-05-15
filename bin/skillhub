@@ -15,80 +15,10 @@ if command -v go >/dev/null 2>&1 && [ -f "$repo_root/go.mod" ]; then
   exec go run ./cmd/skillhub "$@"
 fi
 
-usage() {
-  printf '%s\n' \
-    'Usage:' \
-    '  skillhub sources list [--tsv]' \
-    '  skillhub sources sync [source-name]' \
-    '  skillhub sources defaults list' \
-    '  skillhub sources defaults add <source-name>' \
-    '  skillhub sources add <path-or-git-url>' \
-    '  skillhub sources remove <name>' \
-    '  skillhub targets list' \
-    '  skillhub targets detect' \
-    '  skillhub installed list' \
-    '  skillhub installed update' \
-    '  skillhub installed uninstall <skill>' \
-    '  skillhub installed usage [[<source>/]<skill>] [--tsv]' \
-    '  skillhub installed usage update --projects [[<source>/]<skill>...] [-v|--verbose]' \
-    '  skillhub skills list' \
-    '  skillhub skills search <query>' \
-    '  skillhub skills install [--target <target>] [--scope global|project] [<source>/]<skill-name>...' \
-    '  skillhub skills install --all' \
-    '  skillhub recommend [--project <path>] [--tsv]' \
-    '  skillhub tui' \
-    '  skillhub update [--cascade] [-v|--verbose]' \
-    '  skillhub version' \
-    '' \
-    'Short aliases:' \
-    '  skillhub list' \
-    '  skillhub search <query>' \
-    '  skillhub install [<source>/]<skill-name>...' \
-    '  skillhub install --all'
-}
+if [ ! -f "$repo_root/go.mod" ]; then
+  printf 'skillhub repository is missing go.mod: %s\n' "$repo_root" >&2
+  exit 1
+fi
 
-cmd="${1:-help}"
-case "$cmd" in
-  sources)
-    shift
-    exec sh "$repo_root/scripts/sources.sh" "$@"
-    ;;
-  targets)
-    shift
-    exec sh "$repo_root/scripts/targets.sh" "$@"
-    ;;
-  installed)
-    shift
-    exec sh "$repo_root/scripts/installed.sh" "$@"
-    ;;
-  skills)
-    shift
-    exec sh "$repo_root/scripts/skills.sh" "$@"
-    ;;
-  list|search|install)
-    exec sh "$repo_root/scripts/skills.sh" "$@"
-    ;;
-  recommend)
-    shift
-    exec sh "$repo_root/scripts/recommend.sh" "$@"
-    ;;
-  tui)
-    printf 'skillhub tui requires Go. Install Go or run sh install.sh from the skillhub checkout.\n' >&2
-    exit 1
-    ;;
-  update)
-    printf 'skillhub update requires the Go command. Run sh install.sh from the skillhub checkout.\n' >&2
-    exit 1
-    ;;
-  version)
-    printf 'skillhub shell wrapper\n'
-    printf 'Go command unavailable; run sh install.sh to build the full CLI.\n'
-    ;;
-  -h|--help|help)
-    usage
-    ;;
-  *)
-    usage >&2
-    exit 1
-    ;;
-esac
+printf 'Go is required to run skillhub from a checkout. Install Go or run sh install.sh to build the installed binary.\n' >&2
+exit 1

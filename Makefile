@@ -1,31 +1,45 @@
 SHELL := /bin/sh
 
+.DEFAULT_GOAL := verify
 GO ?= go
-SKILLHUB ?= sh bin/skillhub
+SKILLHUB ?= $(GO) run ./cmd/skillhub
+SKILLHUB_DEV ?= $(GO) run ./cmd/skillhub-dev
 AGENT_RULES_PATH ?= ../agent-rules
 
-.PHONY: help check test vet diff-check verify smoke-temp tui-temp
+.PHONY: help check check-all verify smoke-temp tui-temp test vet diff-check tidy generate fmt lint test-race bench-all cover-html maintainer-check
 
 help:
 	@printf '%s\n' \
 		'Targets:' \
-		'  make check       Run repository validation script' \
+		'  make check       Run Go dev verification' \
+		'  make check-all   Alias for make verify' \
 		'  make test        Run Go tests' \
 		'  make vet         Run go vet' \
 		'  make diff-check  Run git diff --check' \
-		'  make verify      Run check, vet, and diff-check' \
+		'  make verify      Run Go dev verification' \
 		'  make smoke-temp  Test default source and temp install without user config' \
 		'  make tui-temp    Open TUI with temp config and temp install dir' \
+		'  make maintainer-check  Run local Unix maintenance checks' \
 		'' \
 		'Variables:' \
 		'  AGENT_RULES_PATH=../agent-rules' \
-		'  SKILLHUB="sh bin/skillhub"'
+		'  SKILLHUB="$(GO) run ./cmd/skillhub"' \
+		'  SKILLHUB_DEV="$(GO) run ./cmd/skillhub-dev"'
 
-check:
-	sh scripts/check.sh
+
+check check-all verify:
+	SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" $(SKILLHUB_DEV) verify
+
+maintainer-check: tidy generate fmt vet lint test test-race cover-html
+
+tidy:
+	$(GO) mod tidy
 
 test:
 	$(GO) test ./...
+
+test-race:
+	$(GO) test -race -count=5 ./...
 
 vet:
 	$(GO) vet ./...
@@ -33,79 +47,26 @@ vet:
 diff-check:
 	git diff --check
 
-verify: check vet diff-check
+generate:
+	$(GO) generate ./...
+
+fmt:
+	$(GO) fmt ./...
+	gofumpt -l -w .
+	gci write -s standard -s default -s "prefix($$($(GO) list -m))" .
+
+lint:
+	golangci-lint run -v --fix --timeout=5m ./...
+
+bench-all:
+	$(GO) test -bench=. -benchmem ./...
+
+cover-html:
+	@$(GO) test -coverprofile=./coverage.text -covermode=atomic $(shell go list ./...)
+	@$(GO) tool cover -html=./coverage.text -o ./cover.html && rm ./coverage.text
 
 smoke-temp:
-	@set -e; \
-	tmp=$$(mktemp -d); \
-	project="$$tmp/project"; \
-	project_b="$$tmp/project-b"; \
-	mkdir -p "$$project/docs" "$$project/pkg" "$$project/cmd/service" "$$project_b"; \
-	printf 'module example.com/project\n\ngo 1.26.0\n' > "$$project/go.mod"; \
-	printf 'go 1.26.0\n\nuse .\n' > "$$project/go.work"; \
-	printf '# Temp Go service\n\nOpenAPI contracts and architecture docs.\n' > "$$project/README.md"; \
-	printf 'openapi: 3.0.0\ninfo:\n  title: API\n  version: v1\n' > "$$project/docs/openapi.yaml"; \
-	printf 'package pkg\n' > "$$project/pkg/public.go"; \
-	printf 'package main\nfunc main() {}\n' > "$$project/cmd/service/main.go"; \
-	printf 'Using temp dir: %s\n' "$$tmp"; \
-	SKILLHUB_CONFIG_DIR="$$tmp/config" \
-	SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" \
-	$(SKILLHUB) sources defaults add agent-rules; \
-	SKILLHUB_CONFIG_DIR="$$tmp/config" \
-	SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" \
-	$(SKILLHUB) search go; \
-		SKILLHUB_CONFIG_DIR="$$tmp/config" \
-		SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" \
-		AGENT_SKILLS_DIR="$$tmp/skills" \
-		$(SKILLHUB) install rules-selector; \
-		SKILLHUB_CONFIG_DIR="$$tmp/config" \
-		$(SKILLHUB) installed usage rules-selector --tsv | grep 'rules-selector'; \
-		test -f "$$tmp/skills/rules-selector/SKILL.md"; \
-		test -f "$$tmp/skills/rules-selector/.skillhub.json"; \
-		SKILLHUB_CONFIG_DIR="$$tmp/config" \
-		SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" \
-		$(SKILLHUB) install rules-selector --target codex --scope project --project "$$project"; \
-		SKILLHUB_CONFIG_DIR="$$tmp/config" \
-		SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" \
-		$(SKILLHUB) install rules-selector --target claude --scope project --project "$$project_b"; \
-		SKILLHUB_CONFIG_DIR="$$tmp/config" \
-		$(SKILLHUB) installed usage rules-selector --tsv | grep "$$project"; \
-		SKILLHUB_CONFIG_DIR="$$tmp/config" \
-		$(SKILLHUB) installed usage rules-selector --tsv | grep "$$project_b"; \
-		usage_update_output=$$(SKILLHUB_CONFIG_DIR="$$tmp/config" SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" $(SKILLHUB) installed usage update --projects rules-selector -v); \
-		printf '%s\n' "$$usage_update_output"; \
-		printf '%s\n' "$$usage_update_output" | grep 'Checking codex/project rules-selector'; \
-		printf '%s\n' "$$usage_update_output" | grep 'Checking claude/project rules-selector'; \
-		targeted_usage_output=$$(SKILLHUB_CONFIG_DIR="$$tmp/config" SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" $(SKILLHUB) installed usage update --projects --target codex --project "$$project" rules-selector -v); \
-		printf '%s\n' "$$targeted_usage_output"; \
-		printf '%s\n' "$$targeted_usage_output" | grep 'Checking codex/project rules-selector'; \
-		! printf '%s\n' "$$targeted_usage_output" | grep 'Checking claude/project rules-selector'; \
-		SKILLHUB_CONFIG_DIR="$$tmp/config" \
-		SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" \
-		$(SKILLHUB) recommend --project "$$project"; \
-		recommend_output=$$(SKILLHUB_CONFIG_DIR="$$tmp/config" SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" $(SKILLHUB) recommend --project "$$project" --tsv); \
-		printf '%s\n' "$$recommend_output"; \
-		printf '%s\n' "$$recommend_output" | grep '^agent-rules	go-project-rules	'; \
-		printf '%s\n' "$$recommend_output" | grep '^agent-rules	docs-project-rules	'; \
-		SKILLHUB_CONFIG_DIR="$$tmp/config" \
-		$(SKILLHUB) installed list --target directory --dir "$$tmp/skills"; \
-	SKILLHUB_CONFIG_DIR="$$tmp/config" \
-	$(SKILLHUB) installed update --target directory --dir "$$tmp/skills"; \
-	SKILLHUB_CONFIG_DIR="$$tmp/config" \
-	$(SKILLHUB) installed uninstall rules-selector --target directory --dir "$$tmp/skills"; \
-	test ! -e "$$tmp/skills/rules-selector"; \
-	SKILLHUB_CONFIG_DIR="$$tmp/config" \
-	$(SKILLHUB) targets detect --project "$$project"
+	SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" $(SKILLHUB_DEV) smoke-temp
 
 tui-temp:
-	@tmp=$$(mktemp -d); \
-	printf 'Using temp dir: %s\n' "$$tmp"; \
-	printf 'Config: %s/config\n' "$$tmp"; \
-	printf 'Install dir: %s/skills\n' "$$tmp"; \
-	SKILLHUB_CONFIG_DIR="$$tmp/config" \
-	SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" \
-	$(SKILLHUB) sources defaults add agent-rules; \
-	SKILLHUB_CONFIG_DIR="$$tmp/config" \
-	SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" \
-	AGENT_SKILLS_DIR="$$tmp/skills" \
-	$(SKILLHUB) tui
+	SKILLHUB_AGENT_RULES_PATH="$(AGENT_RULES_PATH)" $(SKILLHUB_DEV) tui-temp

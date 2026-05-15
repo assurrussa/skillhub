@@ -1,14 +1,31 @@
-package cli
+package cli_test
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/assurrussa/skillhub/internal/cli"
+	"github.com/assurrussa/skillhub/internal/core"
+)
+
+const (
+	testArgAdd         = "add"
+	testCommandSkills  = "skills"
+	testCommandSources = "sources"
+	testCommandTargets = "targets"
+	testDirDefaults    = "defaults"
+	testFlagTSV        = "--tsv"
+	testSubcommandList = "list"
+	testRepoTargetsDir = testCommandTargets
 )
 
 func testRepoRoot(t *testing.T) string {
@@ -20,29 +37,414 @@ func testRepoRoot(t *testing.T) string {
 	return root
 }
 
-func runScriptForTest(t *testing.T, env []string, script string, args ...string) (string, error) {
+func runCLIForTest(t *testing.T, env []string, command string, args ...string) (string, error) {
 	t.Helper()
-	root := testRepoRoot(t)
-	cmdArgs := append([]string{filepath.Join(root, script)}, args...)
-	cmd := exec.Command("sh", cmdArgs...)
-	cmd.Dir = root
-	cmd.Env = append(os.Environ(), env...)
-	output, err := cmd.CombinedOutput()
-	return string(output), err
+	stdout, stderr, err := runCLISplitForTest(t, env, command, args...)
+	return stdout + stderr, err
 }
 
-func runScriptSplitForTest(t *testing.T, env []string, script string, args ...string) (string, string, error) {
+func skillhubConfigEnv(configDir string) []string {
+	return []string{"SKILLHUB_CONFIG_DIR=" + configDir}
+}
+
+func runCLIWithConfig(t *testing.T, configDir string, command string, args ...string) (string, error) {
+	t.Helper()
+	return runCLIForTest(t, skillhubConfigEnv(configDir), command, args...)
+}
+
+func installedUsageFixtureRow(source, skill, target, projectPath, sourceLocation string) string {
+	targetRoot := filepath.Join(projectPath, "."+target, "skills")
+	if target == "codex" {
+		targetRoot = filepath.Join(projectPath, ".agents", "skills")
+	}
+	return strings.Join([]string{
+		source,
+		skill,
+		target,
+		"project",
+		projectPath,
+		targetRoot,
+		filepath.Join(targetRoot, skill),
+		"-",
+		sourceLocation,
+		"catalog/skills.tsv",
+		"old",
+		"2026-05-05T00:00:00Z",
+		"2026-05-05T00:00:00Z",
+	}, "\t")
+}
+
+func overwriteFile(t *testing.T, path string, data string) {
+	t.Helper()
+	file, err := os.OpenFile(filepath.Clean(path), os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
+		t.Fatalf("open file for overwrite: %v", err)
+	}
+	if _, err := file.WriteString(data); err != nil {
+		_ = file.Close()
+		t.Fatalf("overwrite file: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close overwritten file: %v", err)
+	}
+}
+
+func runCLISplitForTest(t *testing.T, env []string, command string, args ...string) (stdout string, stderr string, err error) {
 	t.Helper()
 	root := testRepoRoot(t)
-	cmdArgs := append([]string{filepath.Join(root, script)}, args...)
-	cmd := exec.Command("sh", cmdArgs...)
-	cmd.Dir = root
-	cmd.Env = append(os.Environ(), env...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	return stdout.String(), stderr.String(), err
+	cliArgs, err := commandCLIArgs(command, args...)
+	if err != nil {
+		return "", err.Error() + "\n", err
+	}
+	restoreEnv := applyTestEnv(append([]string{
+		"SKILLHUB_REPO=" + root,
+		"SKILLHUB_CALLER_CWD=" + root,
+	}, env...))
+	defer restoreEnv()
+
+	var outBuf, errBuf bytes.Buffer
+	cmd := cli.NewRootCommand()
+	cmd.SetOut(&outBuf)
+	cmd.SetErr(&errBuf)
+	cmd.SetArgs(cliArgs)
+	err = cmd.Execute()
+	if err != nil {
+		_, _ = fmt.Fprintln(&errBuf, err)
+	}
+	return outBuf.String(), errBuf.String(), err
+}
+
+func commandCLIArgs(command string, args ...string) ([]string, error) {
+	switch command {
+	case testCommandSkills:
+		return append([]string{testCommandSkills}, args...), nil
+	case testCommandSources:
+		return append([]string{testCommandSources}, args...), nil
+	case "installed":
+		return append([]string{"installed"}, args...), nil
+	case testCommandTargets:
+		return append([]string{testCommandTargets}, args...), nil
+	case "recommend":
+		return append([]string{"recommend"}, args...), nil
+	default:
+		return nil, fmt.Errorf("unsupported CLI test command: %s", command)
+	}
+}
+
+func applyTestEnv(env []string) func() {
+	type oldValue struct {
+		value string
+		ok    bool
+	}
+	old := map[string]oldValue{}
+	for _, item := range env {
+		key, value, ok := strings.Cut(item, "=")
+		if !ok {
+			continue
+		}
+		if _, seen := old[key]; !seen {
+			previous, existed := os.LookupEnv(key)
+			old[key] = oldValue{value: previous, ok: existed}
+		}
+		_ = os.Setenv(key, value)
+	}
+	return func() {
+		for key, previous := range old {
+			if previous.ok {
+				_ = os.Setenv(key, previous.value)
+			} else {
+				_ = os.Unsetenv(key)
+			}
+		}
+	}
+}
+
+func writeFakeSkillhubRepo(t *testing.T, root string) {
+	t.Helper()
+	writeFakeSkillhubRuntimeFiles(t, root)
+	for _, dir := range []string{testDirDefaults, testRepoTargetsDir} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatalf("mkdir fake repo dir %s: %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(
+		filepath.Join(root, testDirDefaults, "sources.tsv"),
+		[]byte("name\ttype\tlocation\tref\tcatalog\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write fake defaults: %v", err)
+	}
+	targets := "id\tlabel\tstatus\tadapter\tdescription\n" +
+		"codex\tCodex\tsupported\tskill-dir\tCodex skills\n" +
+		"directory\tDirectory\tsupported\tskill-dir\tDirectory skills\n"
+	if err := os.WriteFile(filepath.Join(root, testRepoTargetsDir, "targets.tsv"), []byte(targets), 0o644); err != nil {
+		t.Fatalf("write fake targets: %v", err)
+	}
+}
+
+func writeFakeSkillhubRuntimeFiles(t *testing.T, root string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(root, "cmd", "skillhub"), 0o755); err != nil {
+		t.Fatalf("mkdir fake runtime dir: %v", err)
+	}
+	goMod := []byte("module example.com/fake-skillhub\n\ngo 1.26.0\n")
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), goMod, 0o644); err != nil {
+		t.Fatalf("write fake go.mod: %v", err)
+	}
+	mainGo := []byte("package main\nfunc main() {}\n")
+	if err := os.WriteFile(filepath.Join(root, "cmd", "skillhub", "main.go"), mainGo, 0o644); err != nil {
+		t.Fatalf("write fake main.go: %v", err)
+	}
+}
+
+func TestTopLevelAddAliasesInstall(t *testing.T) {
+	tmp := t.TempDir()
+	repo := filepath.Join(tmp, "repo")
+	configDir := filepath.Join(tmp, "config")
+	sourceDir := filepath.Join(tmp, "source")
+	targetDir := filepath.Join(tmp, "target")
+	writeFakeSkillhubRepo(t, repo)
+	writeInstallableTestSource(t, sourceDir, "go-project-rules", "v1")
+	writeTestSources(t, configDir, sourceDir)
+	t.Setenv("SKILLHUB_REPO", repo)
+	t.Setenv("SKILLHUB_CONFIG_DIR", configDir)
+
+	cmd := cli.NewRootCommand()
+	cmd.SetArgs([]string{
+		testArgAdd,
+		"local/go-project-rules",
+		"--target",
+		"directory",
+		"--dir",
+		targetDir,
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("skillhub add failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(targetDir, "go-project-rules", "SKILL.md")); err != nil {
+		t.Fatalf("expected add alias to install skill through Go backend: %v", err)
+	}
+}
+
+func TestTargetsListUsesGoBackend(t *testing.T) {
+	tmp := t.TempDir()
+	repo := filepath.Join(tmp, "repo")
+	writeFakeSkillhubRuntimeFiles(t, repo)
+	for _, dir := range []string{testDirDefaults, testRepoTargetsDir} {
+		if err := os.MkdirAll(filepath.Join(repo, dir), 0o755); err != nil {
+			t.Fatalf("mkdir fake repo dir %s: %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(
+		filepath.Join(repo, testDirDefaults, "sources.tsv"),
+		[]byte("name\ttype\tlocation\tref\tcatalog\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write defaults: %v", err)
+	}
+	targets := "id\tlabel\tstatus\tadapter\tdescription\n" +
+		"codex\tCodex\tsupported\tskill-dir\tCodex skills\n"
+	if err := os.WriteFile(filepath.Join(repo, testRepoTargetsDir, "targets.tsv"), []byte(targets), 0o644); err != nil {
+		t.Fatalf("write targets: %v", err)
+	}
+	t.Setenv("SKILLHUB_REPO", repo)
+
+	cmd := cli.NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{testCommandTargets, testSubcommandList, testFlagTSV})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("targets list should use Go backend: %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "codex\tCodex\tsupported\tskill-dir\tCodex skills") {
+		t.Fatalf("unexpected targets output:\n%s", got)
+	}
+}
+
+func TestRepoDiscoveryUsesRuntimeMarkers(t *testing.T) {
+	tmp := t.TempDir()
+	repo := filepath.Join(tmp, "repo")
+	writeFakeSkillhubRuntimeFiles(t, repo)
+	for _, dir := range []string{testDirDefaults, testRepoTargetsDir} {
+		if err := os.MkdirAll(filepath.Join(repo, dir), 0o755); err != nil {
+			t.Fatalf("mkdir fake repo dir %s: %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(
+		filepath.Join(repo, testDirDefaults, "sources.tsv"),
+		[]byte(core.SourcesHeader+"\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write defaults: %v", err)
+	}
+	targets := core.TargetsHeader + "\n" +
+		"codex\tCodex\tsupported\tskill-dir\tCodex skills\n"
+	if err := os.WriteFile(filepath.Join(repo, testRepoTargetsDir, "targets.tsv"), []byte(targets), 0o644); err != nil {
+		t.Fatalf("write targets: %v", err)
+	}
+	t.Setenv("SKILLHUB_REPO", repo)
+
+	cmd := cli.NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{testCommandTargets, testSubcommandList, testFlagTSV})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("targets list should work from runtime markers: %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "codex\tCodex\tsupported\tskill-dir\tCodex skills") {
+		t.Fatalf("unexpected targets output:\n%s", got)
+	}
+}
+
+func TestBinSkillhubFailsWithoutGo(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bin/skillhub is a POSIX shell wrapper")
+	}
+	root := testRepoRoot(t)
+	tmp := t.TempDir()
+	repo := filepath.Join(tmp, "repo")
+	writeFakeSkillhubRuntimeFiles(t, repo)
+	for _, dir := range []string{"bin", testDirDefaults, testRepoTargetsDir} {
+		if err := os.MkdirAll(filepath.Join(repo, dir), 0o755); err != nil {
+			t.Fatalf("mkdir fake repo dir %s: %v", dir, err)
+		}
+	}
+	wrapper, err := os.ReadFile(filepath.Join(root, "bin", "skillhub"))
+	if err != nil {
+		t.Fatalf("read bin/skillhub: %v", err)
+	}
+	wrapperPath := filepath.Join(repo, "bin", "skillhub")
+	// #nosec G306,G703 -- wrapperPath is inside a test temp directory.
+	if err := os.WriteFile(wrapperPath, wrapper, 0o755); err != nil {
+		t.Fatalf("write fake wrapper: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(repo, testDirDefaults, "sources.tsv"),
+		[]byte(core.SourcesHeader+"\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write defaults: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(repo, testRepoTargetsDir, "targets.tsv"),
+		[]byte(core.TargetsHeader+"\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write targets: %v", err)
+	}
+
+	pathDir := filepath.Join(tmp, "path")
+	if err := os.MkdirAll(pathDir, 0o755); err != nil {
+		t.Fatalf("mkdir PATH dir: %v", err)
+	}
+	dirnamePath, err := exec.LookPath("dirname")
+	if err != nil {
+		t.Fatalf("dirname is required for shell wrapper test: %v", err)
+	}
+	if err := os.Symlink(dirnamePath, filepath.Join(pathDir, "dirname")); err != nil {
+		t.Fatalf("symlink dirname: %v", err)
+	}
+	shPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Fatalf("sh is required for shell wrapper test: %v", err)
+	}
+	cmd := exec.CommandContext(context.Background(), shPath, wrapperPath, testSubcommandList)
+	cmd.Env = append(os.Environ(), "PATH="+pathDir)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected wrapper to fail without go, got:\n%s", output)
+	}
+	if !strings.Contains(string(output), "Go is required to run skillhub from a checkout") {
+		t.Fatalf("expected Go-required error, got:\n%s", output)
+	}
+}
+
+func TestSourcesDefaultsPluralCommandUsesGoBackend(t *testing.T) {
+	tmp := t.TempDir()
+	repo := filepath.Join(tmp, "repo")
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	sourceDir := filepath.Join(tmp, "source")
+	writeFakeSkillhubRepo(t, repo)
+	writeInstallableTestSource(t, sourceDir, "rules-selector", "v1")
+	defaults := core.SourcesHeader + "\n" +
+		"local-default\tpath\t" + sourceDir + "\t-\tcatalog/skills.tsv\n"
+	if err := os.WriteFile(filepath.Join(repo, "defaults", "sources.tsv"), []byte(defaults), 0o644); err != nil {
+		t.Fatalf("write defaults: %v", err)
+	}
+	t.Setenv("SKILLHUB_REPO", repo)
+	t.Setenv("SKILLHUB_CONFIG_DIR", configDir)
+	t.Setenv("SKILLHUB_CACHE_DIR", cacheDir)
+
+	var out bytes.Buffer
+	cmd := cli.NewRootCommand()
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{testCommandSources, testDirDefaults, testSubcommandList, testFlagTSV})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("sources defaults list failed: %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "local-default\tpath\t"+sourceDir+"\t-\tcatalog/skills.tsv") {
+		t.Fatalf("unexpected defaults output:\n%s", got)
+	}
+
+	out.Reset()
+	cmd = cli.NewRootCommand()
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{testCommandSources, testDirDefaults, testArgAdd, "local-default"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("sources defaults add failed: %v", err)
+	}
+	sources, err := os.ReadFile(filepath.Join(configDir, "sources.tsv"))
+	if err != nil {
+		t.Fatalf("read user sources: %v", err)
+	}
+	if !strings.Contains(string(sources), "local-default\tpath\t"+sourceDir+"\t-\tcatalog/skills.tsv") {
+		t.Fatalf("expected default source to be added, got:\n%s", sources)
+	}
+}
+
+func TestTopLevelRestoreChecksLockfileWithGoBackend(t *testing.T) {
+	tmp := t.TempDir()
+	repo := filepath.Join(tmp, "repo")
+	project := filepath.Join(tmp, "project")
+	writeFakeSkillhubRepo(t, repo)
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+	t.Setenv("SKILLHUB_REPO", repo)
+
+	cmd := cli.NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"restore", "--project", project, "--check", "--tsv", "-v"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("skillhub restore failed: %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "source\tskill\ttarget\tstatus\tinstalled_path\tcontent_hash\treason") {
+		t.Fatalf("expected restore check TSV header, got:\n%s", got)
+	}
+}
+
+func TestSkillsRestoreChecksLockfileWithGoBackend(t *testing.T) {
+	tmp := t.TempDir()
+	repo := filepath.Join(tmp, "repo")
+	project := filepath.Join(tmp, "project")
+	writeFakeSkillhubRepo(t, repo)
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+	t.Setenv("SKILLHUB_REPO", repo)
+
+	cmd := cli.NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"skills", "restore", "--project", project, "--check"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("skillhub skills restore failed: %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "No project lockfile found: "+filepath.Join(project, "skills.lock.toml")) {
+		t.Fatalf("expected no-lockfile restore output, got:\n%s", got)
+	}
 }
 
 func writeTestSourceCatalog(t *testing.T, dir string) {
@@ -52,7 +454,8 @@ func writeTestSourceCatalog(t *testing.T, dir string) {
 	}
 	catalog := strings.Join([]string{
 		"name\tcategory\ttriggers\tdescription",
-		"reusable-module-rules\tarchitecture\treusable module,library,public surface,external consumer,release readiness,replace\tReusable rules",
+		"reusable-module-rules\tarchitecture\t" +
+			"reusable module,library,public surface,external consumer,release readiness,replace\tReusable rules",
 		"docs-project-rules\tdocumentation\tdocs,documentation,readme,architecture,runbook,audit,report\tDocs rules",
 		"go-project-rules\tgo\tgo,golang,go.mod,go.work,backend,library\tGo rules",
 		"rules-selector\ttooling\tselect rules,install skills,recommend skills,project analysis,catalog,skillhub\tSelector",
@@ -150,16 +553,15 @@ func readSourceSyncedAt(t *testing.T, cacheDir, name string) int64 {
 	return parsed
 }
 
-func writeCachedGitCatalog(t *testing.T, cacheDir, name, extraSkill string) string {
+func writeCachedGitCatalog(t *testing.T, cacheDir, name, extraSkill string) {
 	t.Helper()
 	sourceDir := filepath.Join(cacheDir, "sources", name)
 	writeTestSourceCatalogWithExtraSkill(t, sourceDir, extraSkill)
-	return sourceDir
 }
 
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(context.Background(), "git", args...)
 	cmd.Dir = dir
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -169,7 +571,7 @@ func runGit(t *testing.T, dir string, args ...string) {
 
 func gitIgnored(t *testing.T, dir string, path string) bool {
 	t.Helper()
-	cmd := exec.Command("git", "check-ignore", "-q", path)
+	cmd := exec.CommandContext(context.Background(), "git", "check-ignore", "-q", path)
 	cmd.Dir = dir
 	err := cmd.Run()
 	return err == nil
@@ -242,10 +644,10 @@ func TestSkillsListUsesFreshCachedGitCatalogWithoutSync(t *testing.T) {
 	writeCachedGitCatalog(t, cacheDir, "cached", "cached-only-rules")
 	writeSourceSyncedAt(t, cacheDir, "cached", time.Now())
 
-	stdout, stderr, err := runScriptSplitForTest(t, []string{
+	stdout, stderr, err := runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/skills.sh", "list", "--tsv")
+	}, "skills", "list", "--tsv")
 	if err != nil {
 		t.Fatalf("skills list failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -275,10 +677,10 @@ func TestSkillsListRefreshesExpiredGitCatalogAndUpdatesTimestamp(t *testing.T) {
 	writeTestSourceCatalogWithExtraSkill(t, sourceDir, "new-rules")
 	commitGitSource(t, sourceDir, "add new rules")
 
-	stdout, stderr, err := runScriptSplitForTest(t, []string{
+	stdout, stderr, err := runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/skills.sh", "list", "--tsv")
+	}, "skills", "list", "--tsv")
 	if err != nil {
 		t.Fatalf("skills list failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -298,10 +700,10 @@ func TestSkillsListUsesStaleCacheWithWarningWhenExpiredRefreshFails(t *testing.T
 	writeCachedGitCatalog(t, cacheDir, "cached", "stale-rules")
 	writeSourceSyncedAt(t, cacheDir, "cached", time.Now().Add(-11*time.Minute))
 
-	stdout, stderr, err := runScriptSplitForTest(t, []string{
+	stdout, stderr, err := runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/skills.sh", "list", "--tsv")
+	}, "skills", "list", "--tsv")
 	if err != nil {
 		t.Fatalf("skills list should use stale cache: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -330,10 +732,10 @@ func TestSkillsListUsesStaleGeneratedCacheWithWarningWhenRefreshFails(t *testing
 		t.Fatalf("remove source remote: %v", err)
 	}
 
-	stdout, stderr, err := runScriptSplitForTest(t, []string{
+	stdout, stderr, err := runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/skills.sh", "list", "--tsv")
+	}, "skills", "list", "--tsv")
 	if err != nil {
 		t.Fatalf("skills list should use stale generated cache: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -351,10 +753,10 @@ func TestSkillsListMissingGitCacheFailsWithSyncHint(t *testing.T) {
 	cacheDir := filepath.Join(tmp, "cache")
 	writeTestGitSources(t, configDir, "cached", filepath.Join(tmp, "missing-remote"))
 
-	stdout, stderr, err := runScriptSplitForTest(t, []string{
+	stdout, stderr, err := runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/skills.sh", "list", "--tsv")
+	}, "skills", "list", "--tsv")
 	if err == nil {
 		t.Fatalf("expected missing cache to fail, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
 	}
@@ -371,10 +773,10 @@ func TestSourcesSyncForcesRefreshAndWritesTimestamp(t *testing.T) {
 	initGitSource(t, sourceDir, "")
 	writeTestGitSources(t, configDir, "cached", sourceDir)
 
-	stdout, stderr, err := runScriptSplitForTest(t, []string{
+	stdout, stderr, err := runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/sources.sh", "sync", "cached")
+	}, "sources", "sync", "cached")
 	if err != nil {
 		t.Fatalf("sources sync failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -383,10 +785,10 @@ func TestSourcesSyncForcesRefreshAndWritesTimestamp(t *testing.T) {
 	writeTestSourceCatalogWithExtraSkill(t, sourceDir, "synced-rules")
 	commitGitSource(t, sourceDir, "add synced rules")
 
-	stdout, stderr, err = runScriptSplitForTest(t, []string{
+	stdout, stderr, err = runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/sources.sh", "sync", "cached")
+	}, "sources", "sync", "cached")
 	if err != nil {
 		t.Fatalf("second sources sync failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -394,10 +796,10 @@ func TestSourcesSyncForcesRefreshAndWritesTimestamp(t *testing.T) {
 		t.Fatalf("expected sync timestamp to advance from %d, got %d", firstStamp, got)
 	}
 
-	stdout, stderr, err = runScriptSplitForTest(t, []string{
+	stdout, stderr, err = runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/skills.sh", "list", "--tsv")
+	}, "skills", "list", "--tsv")
 	if err != nil {
 		t.Fatalf("skills list failed after sync: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -413,10 +815,10 @@ func TestSourcesAddGitPerformsInitialSync(t *testing.T) {
 	sourceDir := filepath.Join(tmp, "source")
 	initGitSource(t, sourceDir, "added-rules")
 
-	stdout, stderr, err := runScriptSplitForTest(t, []string{
+	stdout, stderr, err := runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/sources.sh", "add", sourceDir, "--name", "added", "--type", "git", "--ref", "main")
+	}, "sources", "add", sourceDir, "--name", "added", "--type", "git", "--ref", "main")
 	if err != nil {
 		t.Fatalf("sources add failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -425,10 +827,10 @@ func TestSourcesAddGitPerformsInitialSync(t *testing.T) {
 	}
 	_ = readSourceSyncedAt(t, cacheDir, "added")
 
-	stdout, stderr, err = runScriptSplitForTest(t, []string{
+	stdout, stderr, err = runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/skills.sh", "list", "--tsv")
+	}, "skills", "list", "--tsv")
 	if err != nil {
 		t.Fatalf("skills list failed after add: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -458,11 +860,11 @@ func TestSourcesAddGitHubTreeURLUsesRepositoryAndBranch(t *testing.T) {
 		t.Fatalf("write git config: %v", err)
 	}
 
-	stdout, stderr, err := runScriptSplitForTest(t, []string{
+	stdout, stderr, err := runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
 		"GIT_CONFIG_GLOBAL=" + gitConfig,
-	}, "scripts/sources.sh", "add", "https://github.com/ton-blockchain/acton-contracts/tree/skills/skills/", "--name", "acton")
+	}, "sources", "add", "https://github.com/ton-blockchain/acton-contracts/tree/skills/skills/", "--name", "acton")
 	if err != nil {
 		t.Fatalf("sources add GitHub tree URL failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -470,10 +872,10 @@ func TestSourcesAddGitHubTreeURLUsesRepositoryAndBranch(t *testing.T) {
 		t.Fatalf("expected add output, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
 	}
 
-	stdout, stderr, err = runScriptSplitForTest(t, []string{
+	stdout, stderr, err = runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/sources.sh", "list", "--tsv")
+	}, "sources", "list", "--tsv")
 	if err != nil {
 		t.Fatalf("sources list failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -499,34 +901,34 @@ func TestSourcesAddGitReusesNameWithDifferentLocationRefreshesCache(t *testing.T
 	initGitSource(t, sourceA, "old-rules")
 	initGitSource(t, sourceB, "new-rules")
 
-	stdout, stderr, err := runScriptSplitForTest(t, []string{
+	stdout, stderr, err := runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/sources.sh", "add", sourceA, "--name", "shared", "--type", "git", "--ref", "main")
+	}, "sources", "add", sourceA, "--name", "shared", "--type", "git", "--ref", "main")
 	if err != nil {
 		t.Fatalf("first sources add failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
 
-	stdout, stderr, err = runScriptSplitForTest(t, []string{
+	stdout, stderr, err = runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/sources.sh", "remove", "shared")
+	}, "sources", "remove", "shared")
 	if err != nil {
 		t.Fatalf("sources remove failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
 
-	stdout, stderr, err = runScriptSplitForTest(t, []string{
+	stdout, stderr, err = runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/sources.sh", "add", sourceB, "--name", "shared", "--type", "git", "--ref", "main")
+	}, "sources", "add", sourceB, "--name", "shared", "--type", "git", "--ref", "main")
 	if err != nil {
 		t.Fatalf("second sources add failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
 
-	stdout, stderr, err = runScriptSplitForTest(t, []string{
+	stdout, stderr, err = runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/skills.sh", "list", "--tsv")
+	}, "skills", "list", "--tsv")
 	if err != nil {
 		t.Fatalf("skills list failed after re-add: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -545,10 +947,10 @@ func TestSourcesRemoveClearsGitCacheAndSyncState(t *testing.T) {
 	sourceDir := filepath.Join(tmp, "source")
 	initGitSource(t, sourceDir, "remove-rules")
 
-	stdout, stderr, err := runScriptSplitForTest(t, []string{
+	stdout, stderr, err := runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/sources.sh", "add", sourceDir, "--name", "removable", "--type", "git", "--ref", "main")
+	}, "sources", "add", sourceDir, "--name", "removable", "--type", "git", "--ref", "main")
 	if err != nil {
 		t.Fatalf("sources add failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -559,10 +961,10 @@ func TestSourcesRemoveClearsGitCacheAndSyncState(t *testing.T) {
 		t.Fatalf("expected source sync state after add: %v", err)
 	}
 
-	stdout, stderr, err = runScriptSplitForTest(t, []string{
+	stdout, stderr, err = runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/sources.sh", "remove", "removable")
+	}, "sources", "remove", "removable")
 	if err != nil {
 		t.Fatalf("sources remove failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -590,10 +992,10 @@ func TestSkillsListIgnoresFreshTimestampWhenCachedOriginDiffers(t *testing.T) {
 	runGit(t, tmp, "clone", sourceA, filepath.Join(cacheDir, "sources", "shared"))
 	writeSourceSyncedAt(t, cacheDir, "shared", time.Now())
 
-	stdout, stderr, err := runScriptSplitForTest(t, []string{
+	stdout, stderr, err := runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/skills.sh", "list", "--tsv")
+	}, "skills", "list", "--tsv")
 	if err != nil {
 		t.Fatalf("skills list failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -616,14 +1018,18 @@ func TestRecommendUsesFreshCachedGitCatalogWithoutSync(t *testing.T) {
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {
 		t.Fatalf("mkdir project: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(projectDir, "go.mod"), []byte("module example.com/project\n\ngo 1.26.0\n"), 0o644); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(projectDir, "go.mod"),
+		[]byte("module example.com/project\n\ngo 1.26.0\n"),
+		0o644,
+	); err != nil {
 		t.Fatalf("write go.mod: %v", err)
 	}
 
-	stdout, stderr, err := runScriptSplitForTest(t, []string{
+	stdout, stderr, err := runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/recommend.sh", "--project", projectDir, "--tsv")
+	}, "recommend", "--project", projectDir, "--tsv")
 	if err != nil {
 		t.Fatalf("recommend failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -640,32 +1046,38 @@ func TestNestedGitSourceCanBeAddedListedSearchedAndInstalled(t *testing.T) {
 	targetDir := filepath.Join(tmp, "target")
 	initNestedGitSource(t, sourceDir)
 
-	stdout, stderr, err := runScriptSplitForTest(t, []string{
+	stdout, stderr, err := runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/sources.sh", "add", sourceDir, "--name", "nested", "--type", "git", "--ref", "main")
+	}, "sources", "add", sourceDir, "--name", "nested", "--type", "git", "--ref", "main")
 	if err != nil {
 		t.Fatalf("sources add nested failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
 
-	stdout, stderr, err = runScriptSplitForTest(t, []string{
+	stdout, stderr, err = runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/skills.sh", "list", "--tsv")
+	}, "skills", "list", "--tsv")
 	if err != nil {
 		t.Fatalf("skills list nested failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "nested\tengineering_tdd\tengineering\tengineering,tdd\tTest-driven development with tracer bullets") {
+	if !strings.Contains(
+		stdout,
+		"nested\tengineering_tdd\tengineering\tengineering,tdd\tTest-driven development with tracer bullets",
+	) {
 		t.Fatalf("expected generated engineering_tdd row, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
 	}
-	if !strings.Contains(stdout, "nested\tproductivity_grill-me\tproductivity\tproductivity,grill-me\tInterview the user relentlessly") {
+	if !strings.Contains(
+		stdout,
+		"nested\tproductivity_grill-me\tproductivity\tproductivity,grill-me\tInterview the user relentlessly",
+	) {
 		t.Fatalf("expected generated productivity_grill-me row, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
 	}
 
-	stdout, stderr, err = runScriptSplitForTest(t, []string{
+	stdout, stderr, err = runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/skills.sh", "search", "--tsv", "tracer")
+	}, "skills", "search", "--tsv", "tracer")
 	if err != nil {
 		t.Fatalf("skills search nested failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -673,10 +1085,10 @@ func TestNestedGitSourceCanBeAddedListedSearchedAndInstalled(t *testing.T) {
 		t.Fatalf("expected search to find generated nested skill, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
 	}
 
-	stdout, stderr, err = runScriptSplitForTest(t, []string{
+	stdout, stderr, err = runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/skills.sh", "install", "nested/engineering_tdd", "--target", "directory", "--dir", targetDir)
+	}, "skills", "install", "nested/engineering_tdd", "--target", "directory", "--dir", targetDir)
 	if err != nil {
 		t.Fatalf("install generated nested skill failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -699,18 +1111,18 @@ func TestRootSkillDirectoriesCanBeAddedAndListed(t *testing.T) {
 	sourceDir := filepath.Join(tmp, "root-source")
 	initRootGitSource(t, sourceDir)
 
-	stdout, stderr, err := runScriptSplitForTest(t, []string{
+	stdout, stderr, err := runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/sources.sh", "add", sourceDir, "--name", "rooted", "--type", "git", "--ref", "main")
+	}, "sources", "add", sourceDir, "--name", "rooted", "--type", "git", "--ref", "main")
 	if err != nil {
 		t.Fatalf("sources add root skills failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
 
-	stdout, stderr, err = runScriptSplitForTest(t, []string{
+	stdout, stderr, err = runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/skills.sh", "search", "--tsv", "red-green")
+	}, "skills", "search", "--tsv", "red-green")
 	if err != nil {
 		t.Fatalf("skills search root skills failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -728,10 +1140,10 @@ func TestNestedInstalledUpdateUsesRegeneratedSource(t *testing.T) {
 	initNestedGitSource(t, sourceDir)
 
 	for _, args := range [][]string{
-		{"scripts/sources.sh", "add", sourceDir, "--name", "nested", "--type", "git", "--ref", "main"},
-		{"scripts/skills.sh", "install", "nested/engineering_tdd", "--target", "directory", "--dir", targetDir},
+		{"sources", "add", sourceDir, "--name", "nested", "--type", "git", "--ref", "main"},
+		{"skills", "install", "nested/engineering_tdd", "--target", "directory", "--dir", targetDir},
 	} {
-		stdout, stderr, err := runScriptSplitForTest(t, []string{
+		stdout, stderr, err := runCLISplitForTest(t, []string{
 			"SKILLHUB_CONFIG_DIR=" + configDir,
 			"SKILLHUB_CACHE_DIR=" + cacheDir,
 		}, args[0], args[1:]...)
@@ -743,10 +1155,10 @@ func TestNestedInstalledUpdateUsesRegeneratedSource(t *testing.T) {
 	writeNestedSkill(t, sourceDir, "engineering/tdd", "Test-driven development with tracer bullets", "TDD v2")
 	commitGitSource(t, sourceDir, "update tdd")
 
-	stdout, stderr, err := runScriptSplitForTest(t, []string{
+	stdout, stderr, err := runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/installed.sh", "update", "--target", "directory", "--dir", targetDir, "-v")
+	}, "installed", "update", "--target", "directory", "--dir", targetDir, "-v")
 	if err != nil {
 		t.Fatalf("installed update generated nested skill failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -766,10 +1178,10 @@ func TestNestedSourceSyncRebuildsGeneratedCatalog(t *testing.T) {
 	sourceDir := filepath.Join(tmp, "nested-source")
 	initNestedGitSource(t, sourceDir)
 
-	stdout, stderr, err := runScriptSplitForTest(t, []string{
+	stdout, stderr, err := runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/sources.sh", "add", sourceDir, "--name", "nested", "--type", "git", "--ref", "main")
+	}, "sources", "add", sourceDir, "--name", "nested", "--type", "git", "--ref", "main")
 	if err != nil {
 		t.Fatalf("sources add nested failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -777,18 +1189,18 @@ func TestNestedSourceSyncRebuildsGeneratedCatalog(t *testing.T) {
 	writeNestedSkill(t, sourceDir, "engineering/diagnose", "Disciplined diagnosis loop", "Diagnose v1")
 	commitGitSource(t, sourceDir, "add diagnose")
 
-	stdout, stderr, err = runScriptSplitForTest(t, []string{
+	stdout, stderr, err = runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/sources.sh", "sync", "nested")
+	}, "sources", "sync", "nested")
 	if err != nil {
 		t.Fatalf("sources sync nested failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
 
-	stdout, stderr, err = runScriptSplitForTest(t, []string{
+	stdout, stderr, err = runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/skills.sh", "list", "--tsv")
+	}, "skills", "list", "--tsv")
 	if err != nil {
 		t.Fatalf("skills list nested after sync failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -804,10 +1216,10 @@ func TestNestedSourceRemoveClearsGeneratedCache(t *testing.T) {
 	sourceDir := filepath.Join(tmp, "nested-source")
 	initNestedGitSource(t, sourceDir)
 
-	stdout, stderr, err := runScriptSplitForTest(t, []string{
+	stdout, stderr, err := runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/sources.sh", "add", sourceDir, "--name", "nested", "--type", "git", "--ref", "main")
+	}, "sources", "add", sourceDir, "--name", "nested", "--type", "git", "--ref", "main")
 	if err != nil {
 		t.Fatalf("sources add nested failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -815,10 +1227,10 @@ func TestNestedSourceRemoveClearsGeneratedCache(t *testing.T) {
 		t.Fatalf("expected generated catalog after add: %v", err)
 	}
 
-	stdout, stderr, err = runScriptSplitForTest(t, []string{
+	stdout, stderr, err = runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/sources.sh", "remove", "nested")
+	}, "sources", "remove", "nested")
 	if err != nil {
 		t.Fatalf("sources remove nested failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -835,14 +1247,14 @@ func TestNestedSourceDuplicateFlattenedNamesFailClearly(t *testing.T) {
 	writeNestedSkill(t, sourceDir, "a_b/c", "First duplicate", "first")
 	writeNestedSkill(t, sourceDir, "a/b_c", "Second duplicate", "second")
 
-	stdout, stderr, err := runScriptSplitForTest(t, []string{
+	stdout, stderr, err := runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/sources.sh", "add", sourceDir, "--name", "dups", "--type", "path")
+	}, "sources", "add", sourceDir, "--name", "dups", "--type", "path")
 	if err == nil {
 		t.Fatalf("expected duplicate generated skill names to fail, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
 	}
-	if !strings.Contains(stderr, "Duplicate generated skill name a_b_c") {
+	if !strings.Contains(stderr, "duplicate generated skill name a_b_c") {
 		t.Fatalf("expected duplicate generated skill error, got stderr:\n%s", stderr)
 	}
 }
@@ -857,22 +1269,26 @@ func TestRecommendReadsGeneratedNestedCatalog(t *testing.T) {
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {
 		t.Fatalf("mkdir project: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(projectDir, "go.mod"), []byte("module example.com/project\n\ngo 1.26.0\n"), 0o644); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(projectDir, "go.mod"),
+		[]byte("module example.com/project\n\ngo 1.26.0\n"),
+		0o644,
+	); err != nil {
 		t.Fatalf("write go.mod: %v", err)
 	}
 
-	stdout, stderr, err := runScriptSplitForTest(t, []string{
+	stdout, stderr, err := runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/sources.sh", "add", sourceDir, "--name", "nested", "--type", "path")
+	}, "sources", "add", sourceDir, "--name", "nested", "--type", "path")
 	if err != nil {
 		t.Fatalf("sources add nested path failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
 
-	stdout, stderr, err = runScriptSplitForTest(t, []string{
+	stdout, stderr, err = runCLISplitForTest(t, []string{
 		"SKILLHUB_CONFIG_DIR=" + configDir,
 		"SKILLHUB_CACHE_DIR=" + cacheDir,
-	}, "scripts/recommend.sh", "--project", projectDir, "--tsv")
+	}, "recommend", "--project", projectDir, "--tsv")
 	if err != nil {
 		t.Fatalf("recommend generated nested failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
@@ -913,7 +1329,7 @@ func TestRecommendRanksSkillsFromProjectSignals(t *testing.T) {
 		}
 	}
 
-	output, err := runScriptForTest(t, []string{"SKILLHUB_CONFIG_DIR=" + configDir}, "scripts/recommend.sh", "--project", projectDir, "--tsv")
+	output, err := runCLIWithConfig(t, configDir, "recommend", "--project", projectDir, "--tsv")
 	if err != nil {
 		t.Fatalf("recommend failed: %v\n%s", err, output)
 	}
@@ -963,7 +1379,7 @@ func TestRecommendEmptyProjectReturnsNoRecommendations(t *testing.T) {
 		t.Fatalf("mkdir project: %v", err)
 	}
 
-	output, err := runScriptForTest(t, []string{"SKILLHUB_CONFIG_DIR=" + configDir}, "scripts/recommend.sh", "--project", projectDir)
+	output, err := runCLIWithConfig(t, configDir, "recommend", "--project", projectDir)
 	if err != nil {
 		t.Fatalf("recommend failed: %v\n%s", err, output)
 	}
@@ -981,16 +1397,18 @@ func TestUsageUpdateProjectsFiltersByTargetAndProject(t *testing.T) {
 		t.Fatalf("mkdir config: %v", err)
 	}
 	registry := strings.Join([]string{
-		"source\tskill\ttarget\tscope\tproject_path\ttarget_root\tinstalled_path\tsource_ref\tsource_location\tcatalog\tcontent_hash\tinstalled_at\tupdated_at",
-		"local\trules-selector\tcodex\tproject\t" + projectA + "\t" + filepath.Join(projectA, ".agents", "skills") + "\t" + filepath.Join(projectA, ".agents", "skills", "rules-selector") + "\t-\t" + tmp + "\tcatalog/skills.tsv\told\t2026-05-05T00:00:00Z\t2026-05-05T00:00:00Z",
-		"local\trules-selector\tclaude\tproject\t" + projectB + "\t" + filepath.Join(projectB, ".claude", "skills") + "\t" + filepath.Join(projectB, ".claude", "skills", "rules-selector") + "\t-\t" + tmp + "\tcatalog/skills.tsv\told\t2026-05-05T00:00:00Z\t2026-05-05T00:00:00Z",
+		core.InstalledUsageHeader,
+		installedUsageFixtureRow("local", "rules-selector", "codex", projectA, tmp),
+		installedUsageFixtureRow("local", "rules-selector", "claude", projectB, tmp),
 		"",
 	}, "\n")
 	if err := os.WriteFile(filepath.Join(configDir, "installed.tsv"), []byte(registry), 0o644); err != nil {
 		t.Fatalf("write installed registry: %v", err)
 	}
 
-	output, err := runScriptForTest(t, []string{"SKILLHUB_CONFIG_DIR=" + configDir}, "scripts/installed.sh", "usage", "update", "--projects", "--target", "codex", "--project", projectA, "rules-selector", "-v")
+	output, err := runCLIWithConfig(
+		t, configDir, "installed", "usage", "update", "--projects",
+		"--target", "codex", "--project", projectA, "rules-selector", "-v")
 	if err != nil {
 		t.Fatalf("usage update failed: %v\n%s", err, output)
 	}
@@ -1017,7 +1435,9 @@ func TestProjectInstallUsesCentralMetadataAndGitignore(t *testing.T) {
 		t.Fatalf("write project gitignore: %v", err)
 	}
 
-	output, err := runScriptForTest(t, []string{"SKILLHUB_CONFIG_DIR=" + configDir}, "scripts/skills.sh", "install", "rules-selector", "--target", "codex", "--scope", "project", "--project", projectDir)
+	output, err := runCLIWithConfig(
+		t, configDir, "skills", "install", "rules-selector",
+		"--target", "codex", "--scope", "project", "--project", projectDir)
 	if err != nil {
 		t.Fatalf("project install failed: %v\n%s", err, output)
 	}
@@ -1060,6 +1480,56 @@ func TestProjectInstallUsesCentralMetadataAndGitignore(t *testing.T) {
 	}
 }
 
+func TestProjectInstallWritesPortableLockfile(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, "config")
+	sourceDir := filepath.Join(tmp, "source")
+	projectDir := filepath.Join(tmp, "project")
+	writeInstallableTestSource(t, sourceDir, "rules-selector", "v1")
+	writeTestSources(t, configDir, sourceDir)
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+
+	output, err := runCLIWithConfig(
+		t, configDir, "skills", "install", "rules-selector",
+		"--target", "codex", "--scope", "project", "--project", projectDir)
+	if err != nil {
+		t.Fatalf("project install failed: %v\n%s", err, output)
+	}
+
+	lockfile, err := os.ReadFile(filepath.Join(projectDir, "skills.lock.toml"))
+	if err != nil {
+		t.Fatalf("expected project lockfile: %v", err)
+	}
+	lock := string(lockfile)
+	for _, want := range []string{
+		"lockfile_version = 1",
+		"[[skills]]",
+		`source = "local"`,
+		`source_type = "path"`,
+		`skill = "rules-selector"`,
+		`qualified_skill = "local/rules-selector"`,
+		`target = "codex"`,
+		`scope = "project"`,
+		`project_path = "."`,
+		`target_root = ".agents/skills"`,
+		`installed_path = ".agents/skills/rules-selector"`,
+		`source_location = "` + sourceDir + `"`,
+		`catalog = "catalog/skills.tsv"`,
+		`content_hash = "`,
+		`installed_at = "`,
+		`updated_at = "`,
+	} {
+		if !strings.Contains(lock, want) {
+			t.Fatalf("expected lockfile to contain %q, got:\n%s", want, lock)
+		}
+	}
+	if strings.Contains(lock, projectDir) {
+		t.Fatalf("lockfile must not contain absolute project path %q:\n%s", projectDir, lock)
+	}
+}
+
 func TestGlobalAndDirectoryInstallsKeepSidecarMetadata(t *testing.T) {
 	tmp := t.TempDir()
 	configDir := filepath.Join(tmp, "config")
@@ -1069,7 +1539,13 @@ func TestGlobalAndDirectoryInstallsKeepSidecarMetadata(t *testing.T) {
 	writeInstallableTestSource(t, sourceDir, "rules-selector", "v1")
 	writeTestSources(t, configDir, sourceDir)
 
-	output, err := runScriptForTest(t, []string{"SKILLHUB_CONFIG_DIR=" + configDir, "AGENT_SKILLS_DIR=" + globalDir}, "scripts/skills.sh", "install", "rules-selector")
+	output, err := runCLIForTest(
+		t,
+		[]string{"SKILLHUB_CONFIG_DIR=" + configDir, "AGENT_SKILLS_DIR=" + globalDir},
+		"skills",
+		"install",
+		"rules-selector",
+	)
 	if err != nil {
 		t.Fatalf("global install failed: %v\n%s", err, output)
 	}
@@ -1077,12 +1553,17 @@ func TestGlobalAndDirectoryInstallsKeepSidecarMetadata(t *testing.T) {
 		t.Fatalf("expected global install sidecar metadata: %v", err)
 	}
 
-	output, err = runScriptForTest(t, []string{"SKILLHUB_CONFIG_DIR=" + configDir}, "scripts/skills.sh", "install", "rules-selector", "--target", "directory", "--dir", directoryDir)
+	output, err = runCLIWithConfig(
+		t, configDir, "skills", "install", "rules-selector",
+		"--target", "directory", "--dir", directoryDir)
 	if err != nil {
 		t.Fatalf("directory install failed: %v\n%s", err, output)
 	}
 	if _, err := os.Stat(filepath.Join(directoryDir, "rules-selector", ".skillhub.json")); err != nil {
 		t.Fatalf("expected directory install sidecar metadata: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "skills.lock.toml")); !os.IsNotExist(err) {
+		t.Fatalf("global/directory install should not create project lockfile, stat err=%v", err)
 	}
 }
 
@@ -1098,7 +1579,9 @@ func TestProjectUsageUpdateWorksWithoutSidecarAndRemovesStaleSidecar(t *testing.
 	}
 	runGit(t, projectDir, "init")
 
-	output, err := runScriptForTest(t, []string{"SKILLHUB_CONFIG_DIR=" + configDir}, "scripts/skills.sh", "install", "rules-selector", "--target", "codex", "--scope", "project", "--project", projectDir)
+	output, err := runCLIWithConfig(
+		t, configDir, "skills", "install", "rules-selector",
+		"--target", "codex", "--scope", "project", "--project", projectDir)
 	if err != nil {
 		t.Fatalf("project install failed: %v\n%s", err, output)
 	}
@@ -1109,7 +1592,9 @@ func TestProjectUsageUpdateWorksWithoutSidecarAndRemovesStaleSidecar(t *testing.
 	}
 
 	writeInstallableTestSource(t, sourceDir, "rules-selector", "v2")
-	output, err = runScriptForTest(t, []string{"SKILLHUB_CONFIG_DIR=" + configDir}, "scripts/installed.sh", "usage", "update", "--projects", "--target", "codex", "--project", projectDir, "rules-selector", "-v")
+	output, err = runCLIWithConfig(
+		t, configDir, "installed", "usage", "update", "--projects",
+		"--target", "codex", "--project", projectDir, "rules-selector", "-v")
 	if err != nil {
 		t.Fatalf("project usage update failed: %v\n%s", err, output)
 	}
@@ -1122,6 +1607,164 @@ func TestProjectUsageUpdateWorksWithoutSidecarAndRemovesStaleSidecar(t *testing.
 	}
 	if _, err := os.Stat(staleMetadata); !os.IsNotExist(err) {
 		t.Fatalf("project update should remove stale sidecar metadata, stat err=%v", err)
+	}
+	lockfile, err := os.ReadFile(filepath.Join(projectDir, "skills.lock.toml"))
+	if err != nil {
+		t.Fatalf("expected project lockfile after update: %v", err)
+	}
+	if !strings.Contains(string(lockfile), `source = "local"`) ||
+		!strings.Contains(string(lockfile), `installed_path = ".agents/skills/rules-selector"`) {
+		t.Fatalf("expected update to refresh project lockfile, got:\n%s", lockfile)
+	}
+}
+
+func TestProjectUninstallRemovesLockfileWhenEmpty(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, "config")
+	sourceDir := filepath.Join(tmp, "source")
+	projectDir := filepath.Join(tmp, "project")
+	writeInstallableTestSource(t, sourceDir, "rules-selector", "v1")
+	writeTestSources(t, configDir, sourceDir)
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+
+	output, err := runCLIWithConfig(
+		t, configDir, "skills", "install", "rules-selector",
+		"--target", "codex", "--scope", "project", "--project", projectDir)
+	if err != nil {
+		t.Fatalf("project install failed: %v\n%s", err, output)
+	}
+	output, err = runCLIWithConfig(
+		t, configDir, "installed", "uninstall", "rules-selector",
+		"--target", "codex", "--scope", "project", "--project", projectDir)
+	if err != nil {
+		t.Fatalf("project uninstall failed: %v\n%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(projectDir, "skills.lock.toml")); !os.IsNotExist(err) {
+		t.Fatalf("expected empty project lockfile to be removed, stat err=%v", err)
+	}
+}
+
+func TestRestoreInstallsMissingProjectSkillFromLockfileWithoutConfiguredSources(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, "config")
+	restoreConfigDir := filepath.Join(tmp, "restore-config")
+	sourceDir := filepath.Join(tmp, "source")
+	projectDir := filepath.Join(tmp, "project")
+	writeInstallableTestSource(t, sourceDir, "rules-selector", "v1")
+	writeTestSources(t, configDir, sourceDir)
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+
+	output, err := runCLIWithConfig(
+		t, configDir, "skills", "install", "rules-selector",
+		"--target", "codex", "--scope", "project", "--project", projectDir)
+	if err != nil {
+		t.Fatalf("project install failed: %v\n%s", err, output)
+	}
+	installedDir := filepath.Join(projectDir, ".agents", "skills", "rules-selector")
+	if err := os.RemoveAll(installedDir); err != nil {
+		t.Fatalf("remove installed skill: %v", err)
+	}
+	if err := os.MkdirAll(restoreConfigDir, 0o755); err != nil {
+		t.Fatalf("mkdir restore config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(restoreConfigDir, "sources.tsv"), []byte("broken\n"), 0o644); err != nil {
+		t.Fatalf("write malformed restore sources: %v", err)
+	}
+
+	output, err = runCLIWithConfig(
+		t, restoreConfigDir, "skills", "restore", "--project", projectDir, "-v")
+	if err != nil {
+		t.Fatalf("restore failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(output, "Restored project skills: installed=1 updated=0 unchanged=0 skipped=0 failed=0") {
+		t.Fatalf("expected restore summary, got:\n%s", output)
+	}
+	content, err := os.ReadFile(filepath.Join(installedDir, "SKILL.md"))
+	if err != nil {
+		t.Fatalf("expected restored skill content: %v", err)
+	}
+	if !strings.Contains(string(content), "v1") {
+		t.Fatalf("expected restored content from lockfile source, got:\n%s", content)
+	}
+	registry, err := os.ReadFile(filepath.Join(restoreConfigDir, "installed.tsv"))
+	if err != nil {
+		t.Fatalf("expected restore to write installed registry: %v", err)
+	}
+	if !strings.Contains(string(registry), "local\trules-selector\tcodex\tproject\t"+projectDir) {
+		t.Fatalf("expected restore registry row with absolute project path, got:\n%s", registry)
+	}
+	sources, err := os.ReadFile(filepath.Join(restoreConfigDir, "sources.tsv"))
+	if err != nil {
+		t.Fatalf("read restore sources: %v", err)
+	}
+	if string(sources) != "broken\n" {
+		t.Fatalf("restore must not mutate user sources, got:\n%s", sources)
+	}
+}
+
+func TestRestoreCheckTSVReportsStatusesWithoutMutation(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, "config")
+	sourceDir := filepath.Join(tmp, "source")
+	projectDir := filepath.Join(tmp, "project")
+	writeInstallableTestSource(t, sourceDir, "rules-selector", "v1")
+	writeTestSources(t, configDir, sourceDir)
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+
+	output, err := runCLIWithConfig(
+		t, configDir, "skills", "install", "rules-selector",
+		"--target", "codex", "--scope", "project", "--project", projectDir)
+	if err != nil {
+		t.Fatalf("project install failed: %v\n%s", err, output)
+	}
+	skillFile := filepath.Join(projectDir, ".agents", "skills", "rules-selector", "SKILL.md")
+	if err := os.WriteFile(skillFile, []byte("# local edit\n"), 0o644); err != nil {
+		t.Fatalf("write local edit: %v", err)
+	}
+
+	output, err = runCLIWithConfig(
+		t, configDir, "skills", "restore", "--check", "--tsv", "--project", projectDir)
+	if err != nil {
+		t.Fatalf("restore check failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(output, "source\tskill\ttarget\tstatus\tinstalled_path\tcontent_hash\treason") {
+		t.Fatalf("expected restore check TSV header, got:\n%s", output)
+	}
+	if !strings.Contains(output, "local\trules-selector\tcodex\tchanged\t.agents/skills/rules-selector\t") {
+		t.Fatalf("expected changed status, got:\n%s", output)
+	}
+	content, err := os.ReadFile(skillFile)
+	if err != nil {
+		t.Fatalf("read local edit: %v", err)
+	}
+	if string(content) != "# local edit\n" {
+		t.Fatalf("restore --check must not mutate installed skill, got:\n%s", content)
+	}
+
+	lockPath := filepath.Join(projectDir, "skills.lock.toml")
+	lockfile, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatalf("read lockfile: %v", err)
+	}
+	broken := strings.ReplaceAll(
+		string(lockfile),
+		`source_location = "`+sourceDir+`"`,
+		`source_location = "`+filepath.Join(tmp, "missing-source")+`"`,
+	)
+	overwriteFile(t, lockPath, broken)
+	output, err = runCLIWithConfig(
+		t, configDir, "skills", "restore", "--check", "--tsv", "--project", projectDir)
+	if err != nil {
+		t.Fatalf("restore check with missing source should not fail: %v\n%s", err, output)
+	}
+	if !strings.Contains(output, "local\trules-selector\tcodex\tskipped\t.agents/skills/rules-selector\t") {
+		t.Fatalf("expected skipped status for missing lockfile source, got:\n%s", output)
 	}
 }
 
@@ -1137,12 +1780,16 @@ func TestInstalledListMarksRegistryBackedProjectSkillManagedWithoutSidecar(t *te
 	}
 	runGit(t, projectDir, "init")
 
-	output, err := runScriptForTest(t, []string{"SKILLHUB_CONFIG_DIR=" + configDir}, "scripts/skills.sh", "install", "rules-selector", "--target", "codex", "--scope", "project", "--project", projectDir)
+	output, err := runCLIWithConfig(
+		t, configDir, "skills", "install", "rules-selector",
+		"--target", "codex", "--scope", "project", "--project", projectDir)
 	if err != nil {
 		t.Fatalf("project install failed: %v\n%s", err, output)
 	}
 
-	output, err = runScriptForTest(t, []string{"SKILLHUB_CONFIG_DIR=" + configDir}, "scripts/installed.sh", "list", "--target", "codex", "--scope", "project", "--project", projectDir, "--tsv")
+	output, err = runCLIWithConfig(
+		t, configDir, "installed", "list",
+		"--target", "codex", "--scope", "project", "--project", projectDir, "--tsv")
 	if err != nil {
 		t.Fatalf("installed list failed: %v\n%s", err, output)
 	}
@@ -1163,12 +1810,15 @@ func TestTargetsDetectCountsRegistryBackedProjectSkillManagedWithoutSidecar(t *t
 	}
 	runGit(t, projectDir, "init")
 
-	output, err := runScriptForTest(t, []string{"SKILLHUB_CONFIG_DIR=" + configDir}, "scripts/skills.sh", "install", "rules-selector", "--target", "codex", "--scope", "project", "--project", projectDir)
+	output, err := runCLIWithConfig(
+		t, configDir, "skills", "install", "rules-selector",
+		"--target", "codex", "--scope", "project", "--project", projectDir)
 	if err != nil {
 		t.Fatalf("project install failed: %v\n%s", err, output)
 	}
 
-	output, err = runScriptForTest(t, []string{"SKILLHUB_CONFIG_DIR=" + configDir}, "scripts/targets.sh", "detect", "--tsv", "--project", projectDir)
+	output, err = runCLIWithConfig(
+		t, configDir, "targets", "detect", "--tsv", "--project", projectDir)
 	if err != nil {
 		t.Fatalf("targets detect failed: %v\n%s", err, output)
 	}
@@ -1189,11 +1839,14 @@ func TestProjectSidecarWithoutRegistryIsUnmanagedForListDetectAndUninstall(t *te
 	if err := os.WriteFile(filepath.Join(installedDir, "SKILL.md"), []byte("# rules-selector\n"), 0o644); err != nil {
 		t.Fatalf("write project skill: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(installedDir, ".skillhub.json"), []byte(`{"source":"local","skill":"rules-selector"}`+"\n"), 0o644); err != nil {
+	sidecar := []byte(`{"source":"local","skill":"rules-selector"}` + "\n")
+	if err := os.WriteFile(filepath.Join(installedDir, ".skillhub.json"), sidecar, 0o644); err != nil {
 		t.Fatalf("write stale sidecar: %v", err)
 	}
 
-	output, err := runScriptForTest(t, []string{"SKILLHUB_CONFIG_DIR=" + configDir}, "scripts/installed.sh", "list", "--target", "codex", "--scope", "project", "--project", projectDir, "--tsv")
+	output, err := runCLIWithConfig(
+		t, configDir, "installed", "list",
+		"--target", "codex", "--scope", "project", "--project", projectDir, "--tsv")
 	if err != nil {
 		t.Fatalf("installed list failed: %v\n%s", err, output)
 	}
@@ -1201,7 +1854,8 @@ func TestProjectSidecarWithoutRegistryIsUnmanagedForListDetectAndUninstall(t *te
 		t.Fatalf("expected stale project sidecar without registry to be unmanaged, got:\n%s", output)
 	}
 
-	output, err = runScriptForTest(t, []string{"SKILLHUB_CONFIG_DIR=" + configDir}, "scripts/targets.sh", "detect", "--tsv", "--project", projectDir)
+	output, err = runCLIWithConfig(
+		t, configDir, "targets", "detect", "--tsv", "--project", projectDir)
 	if err != nil {
 		t.Fatalf("targets detect failed: %v\n%s", err, output)
 	}
@@ -1210,11 +1864,13 @@ func TestProjectSidecarWithoutRegistryIsUnmanagedForListDetectAndUninstall(t *te
 		t.Fatalf("expected targets detect to treat stale project sidecar as unmanaged %q, got:\n%s", want, output)
 	}
 
-	output, err = runScriptForTest(t, []string{"SKILLHUB_CONFIG_DIR=" + configDir}, "scripts/installed.sh", "uninstall", "rules-selector", "--target", "codex", "--scope", "project", "--project", projectDir)
+	output, err = runCLIWithConfig(
+		t, configDir, "installed", "uninstall", "rules-selector",
+		"--target", "codex", "--scope", "project", "--project", projectDir)
 	if err == nil {
 		t.Fatalf("expected uninstall to refuse stale project sidecar without registry, got:\n%s", output)
 	}
-	if !strings.Contains(output, "Refusing to uninstall unmanaged skill") {
+	if !strings.Contains(output, "refusing to uninstall unmanaged skill") {
 		t.Fatalf("expected unmanaged uninstall refusal, got:\n%s", output)
 	}
 }
@@ -1233,11 +1889,14 @@ func TestProjectUpdateIgnoresSidecarWithoutRegistry(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(installedDir, "SKILL.md"), []byte("# rules-selector\n\nlocal v1\n"), 0o644); err != nil {
 		t.Fatalf("write project skill: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(installedDir, ".skillhub.json"), []byte(`{"source":"local","skill":"rules-selector"}`+"\n"), 0o644); err != nil {
+	sidecar := []byte(`{"source":"local","skill":"rules-selector"}` + "\n")
+	if err := os.WriteFile(filepath.Join(installedDir, ".skillhub.json"), sidecar, 0o644); err != nil {
 		t.Fatalf("write stale sidecar: %v", err)
 	}
 
-	output, err := runScriptForTest(t, []string{"SKILLHUB_CONFIG_DIR=" + configDir}, "scripts/installed.sh", "update", "--target", "codex", "--scope", "project", "--project", projectDir, "-v")
+	output, err := runCLIWithConfig(
+		t, configDir, "installed", "update",
+		"--target", "codex", "--scope", "project", "--project", projectDir, "-v")
 	if err != nil {
 		t.Fatalf("project update failed: %v\n%s", err, output)
 	}

@@ -178,6 +178,13 @@ func TestCoreAddGitHubTreeURLMaterializesNestedSkills(t *testing.T) {
 	if !strings.Contains(string(catalog), "func2tolk\tfunc2tolk\t") || !strings.Contains(string(catalog), "tolk\ttolk\t") {
 		t.Fatalf("expected generated acton skills, got:\n%s", catalog)
 	}
+	statuses, err := backend.ListSourceStatuses()
+	if err != nil {
+		t.Fatalf("list source statuses: %v", err)
+	}
+	if len(statuses) != 1 || statuses[0].Status != core.SourceStatusFresh {
+		t.Fatalf("expected rewritten git origin to be treated as fresh, got %#v", statuses)
+	}
 }
 
 func TestCoreAddGitSourceSupportsTagRef(t *testing.T) {
@@ -255,6 +262,48 @@ func TestCoreListSourceStatusesReturnsFreshStaleMissingLocal(t *testing.T) {
 		if got[name] != status {
 			t.Fatalf("expected %s status %s, got statuses %#v", name, status, statuses)
 		}
+	}
+}
+
+func TestCoreListSourceStatusesRejectsCacheLocalURLRewrite(t *testing.T) {
+	tmp := t.TempDir()
+	repo := filepath.Join(tmp, "repo")
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	sourceA := filepath.Join(tmp, "source-a")
+	sourceB := filepath.Join(tmp, "source-b")
+	writeCoreRepo(t, repo)
+	writeCoreCatalog(t, sourceA, "old-rules")
+	writeCoreCatalog(t, sourceB, "new-rules")
+	runCoreGit(t, sourceA, "init")
+	runCoreGit(t, sourceA, "checkout", "-b", "main")
+	commitCoreGit(t, sourceA)
+	runCoreGit(t, sourceB, "init")
+	runCoreGit(t, sourceB, "checkout", "-b", "main")
+	commitCoreGit(t, sourceB)
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config: %v", err)
+	}
+	sources := core.SourcesHeader + "\n" +
+		"shared\tgit\t" + sourceB + "\tmain\tcatalog/skills.tsv\n"
+	if err := os.WriteFile(filepath.Join(configDir, "sources.tsv"), []byte(sources), 0o644); err != nil {
+		t.Fatalf("write sources: %v", err)
+	}
+	cachedSource := filepath.Join(cacheDir, "sources", "shared")
+	if err := os.MkdirAll(filepath.Dir(cachedSource), 0o755); err != nil {
+		t.Fatalf("mkdir cache sources: %v", err)
+	}
+	runCoreGit(t, tmp, "clone", sourceA, cachedSource)
+	runCoreGit(t, cachedSource, "config", "url."+sourceA+".insteadOf", sourceB)
+	writeCoreSourceSyncedAt(t, cacheDir, "shared", time.Date(2026, 5, 14, 10, 0, 0, 0, time.UTC))
+	backend := coreBackend(t, repo, tmp, configDir, cacheDir, nil)
+
+	statuses, err := backend.ListSourceStatuses()
+	if err != nil {
+		t.Fatalf("list source statuses: %v", err)
+	}
+	if len(statuses) != 1 || statuses[0].Status != core.SourceStatusError {
+		t.Fatalf("expected cache-local rewrite to be rejected, got %#v", statuses)
 	}
 }
 

@@ -549,8 +549,8 @@ func (b *Backend) ensureGitSourceOrigin(source Source, sourcePath string) error 
 	if !b.gitDirExists(sourcePath) {
 		return nil
 	}
-	origin, _ := b.gitOutput(sourcePath, "remote", "get-url", "origin")
-	if strings.TrimSpace(origin) == source.Location {
+	matches, _ := b.cachedGitOriginMatches(source, sourcePath)
+	if matches {
 		return nil
 	}
 	return b.removeCachedSourcePath(source.Name, sourcePath)
@@ -645,11 +645,11 @@ func (b *Backend) cachedGitOriginError(source Source, sourcePath string) error {
 		}
 		return err
 	}
-	origin, err := b.gitOutput(sourcePath, "remote", "get-url", "origin")
+	matches, err := b.cachedGitOriginMatches(source, sourcePath)
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(origin) == source.Location {
+	if matches {
 		return nil
 	}
 	return fmt.Errorf(
@@ -657,6 +657,38 @@ func (b *Backend) cachedGitOriginError(source Source, sourcePath string) error {
 		source.Name,
 		source.Name,
 	)
+}
+
+func (b *Backend) cachedGitOriginMatches(source Source, sourcePath string) (bool, error) {
+	origin, err := b.gitOutput(sourcePath, "config", "--get", "remote.origin.url")
+	if err != nil {
+		return false, err
+	}
+	resolvedOrigin, err := b.resolvedGitURL(strings.TrimSpace(origin))
+	if err != nil {
+		return false, err
+	}
+	// The cache repo may have its own URL rewrites; those must not validate a mismatched origin.
+	cacheResolvedOrigin, err := b.gitOutput(sourcePath, "remote", "get-url", "origin")
+	if err != nil {
+		return false, err
+	}
+	if strings.TrimSpace(cacheResolvedOrigin) != resolvedOrigin {
+		return false, nil
+	}
+	configured, err := b.resolvedGitURL(source.Location)
+	if err != nil {
+		return false, err
+	}
+	return resolvedOrigin == configured, nil
+}
+
+func (b *Backend) resolvedGitURL(rawURL string) (string, error) {
+	resolved, err := b.gitOutput(b.repoRoot, "ls-remote", "--get-url", rawURL)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(resolved), nil
 }
 
 func (b *Backend) clearSourceCache(name string) error {

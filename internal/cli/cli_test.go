@@ -1041,6 +1041,18 @@ func TestSourcesAddGitHubTreeURLUsesRepositoryAndBranch(t *testing.T) {
 	if !strings.Contains(string(catalog), "func2tolk\tfunc2tolk\t") || !strings.Contains(string(catalog), "tolk\ttolk\t") {
 		t.Fatalf("expected generated catalog to include func2tolk and tolk without false duplicates, got:\n%s", catalog)
 	}
+
+	stdout, stderr, err = runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+		"GIT_CONFIG_GLOBAL=" + gitConfig,
+	}, "skills", "list", "--tsv")
+	if err != nil {
+		t.Fatalf("skills list should accept git insteadOf origin rewrite: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "acton\tfunc2tolk\t") || !strings.Contains(stdout, "acton\ttolk\t") {
+		t.Fatalf("expected generated skills after origin rewrite, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
 }
 
 func TestSourcesAddGitReusesNameWithDifferentLocationRefreshesCache(t *testing.T) {
@@ -1140,7 +1152,9 @@ func TestSkillsListRejectsCacheWhenCachedOriginDiffers(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(cacheDir, "sources"), 0o755); err != nil {
 		t.Fatalf("mkdir cache sources: %v", err)
 	}
-	runGit(t, tmp, "clone", sourceA, filepath.Join(cacheDir, "sources", "shared"))
+	cachedSource := filepath.Join(cacheDir, "sources", "shared")
+	runGit(t, tmp, "clone", sourceA, cachedSource)
+	runGit(t, cachedSource, "config", "url."+sourceA+".insteadOf", sourceB)
 	writeSourceSyncedAt(t, cacheDir, "shared", time.Now())
 
 	stdout, stderr, err := runCLISplitForTest(t, []string{

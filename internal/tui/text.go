@@ -35,7 +35,7 @@ func emptyLabel(value, fallback string) string {
 }
 
 func labelLine(label, value string) string {
-	return fmt.Sprintf("%-9s %s", subtleStyle.Render(label), value)
+	return subtleStyle.Render(fmt.Sprintf("%-9s", label)) + " " + value
 }
 
 func wrapText(value string, width int) string {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -45,6 +46,7 @@ func NewRootCommand() *cobra.Command {
 		Short: "Manage skill sources",
 	}
 	sources.AddCommand(sourceListCommand())
+	sources.AddCommand(sourceStatusCommand())
 	sources.AddCommand(sourceSyncCommand())
 	sources.AddCommand(sourceAddCommand())
 	sources.AddCommand(sourceRemoveCommand())
@@ -119,6 +121,33 @@ func sourceListCommand() *cobra.Command {
 				return err
 			}
 			renderSources(cmd.OutOrStdout(), sources, tsv)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&tsv, "tsv", false, "print tab-separated output")
+	return cmd
+}
+
+func sourceStatusCommand() *cobra.Command {
+	var tsv bool
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: "Show source cache status",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			repoRoot, err := resolveRepoRoot()
+			if err != nil {
+				return err
+			}
+			backend, err := core.NewDefault(repoRoot)
+			if err != nil {
+				return err
+			}
+			statuses, err := backend.ListSourceStatuses()
+			if err != nil {
+				return err
+			}
+			renderSourceStatuses(cmd.OutOrStdout(), statuses, tsv)
 			return nil
 		},
 	}
@@ -516,7 +545,10 @@ func recommendCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rows, err := backend.Recommend(core.RecommendOptions{Project: project})
+			rows, warning, err := backend.Recommend(core.RecommendOptions{Project: project})
+			if warning != "" {
+				_, _ = fmt.Fprint(cmd.ErrOrStderr(), warning)
+			}
 			if err != nil {
 				return err
 			}
@@ -620,7 +652,7 @@ func installCommand(use, short string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			output, err := backend.Install(core.InstallOptions{
+			output, warning, err := backend.Install(core.InstallOptions{
 				All:     all,
 				Names:   args,
 				Target:  target,
@@ -628,6 +660,9 @@ func installCommand(use, short string) *cobra.Command {
 				Project: project,
 				Dir:     dir,
 			})
+			if warning != "" {
+				_, _ = fmt.Fprint(cmd.ErrOrStderr(), warning)
+			}
 			_, _ = fmt.Fprint(cmd.OutOrStdout(), output)
 			return err
 		},
@@ -770,6 +805,58 @@ func renderSources(out io.Writer, sources []core.Source, tsv bool) {
 	if len(sources) == 0 {
 		_, _ = fmt.Fprintln(out, "No sources configured. Run: skillhub sources defaults list")
 	}
+}
+
+func renderSourceStatuses(out io.Writer, statuses []core.SourceStatus, tsv bool) {
+	if tsv {
+		_, _ = fmt.Fprintln(out, core.SourceStatusesHeader)
+		for _, row := range statuses {
+			_, _ = fmt.Fprintf(out, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				row.Name, row.Type, row.Status, formatSourceStatusTime(row.LastSyncedAt),
+				row.CachePath, row.Ref, row.Catalog, row.Location, row.Message)
+		}
+		return
+	}
+	_, _ = fmt.Fprintf(out, "%-20s %-8s %-8s %-20s %-36s %s\n",
+		"name", "type", "status", "last_synced_at", "cache_path", "message")
+	_, _ = fmt.Fprintf(out, "%-20s %-8s %-8s %-20s %-36s %s\n",
+		"--------------------", "--------", "--------", "--------------------",
+		"------------------------------------", "-------")
+	for _, row := range statuses {
+		_, _ = fmt.Fprintf(out, "%-20s %-8s %-8s %-20s %-36s %s\n",
+			row.Name,
+			row.Type,
+			row.Status,
+			formatSourceStatusTime(row.LastSyncedAt),
+			truncateTableCell(row.CachePath, 36),
+			row.Message,
+		)
+		_, _ = fmt.Fprintf(out, "%-20s %-8s %-8s %-20s %-36s ref=%s catalog=%s location=%s\n",
+			"", "", "", "", "", row.Ref, row.Catalog, row.Location)
+	}
+	if len(statuses) == 0 {
+		_, _ = fmt.Fprintln(out, "No sources configured. Run: skillhub sources defaults list")
+	}
+}
+
+func formatSourceStatusTime(value time.Time) string {
+	if value.IsZero() {
+		return "-"
+	}
+	return value.UTC().Format(time.RFC3339)
+}
+
+func truncateTableCell(value string, width int) string {
+	if width <= 0 || len(value) <= width {
+		return value
+	}
+	if width <= 1 {
+		return value[:width]
+	}
+	if width <= 3 {
+		return value[:width]
+	}
+	return value[:width-3] + "..."
 }
 
 func renderTargets(out io.Writer, targets []core.Target, tsv bool) {

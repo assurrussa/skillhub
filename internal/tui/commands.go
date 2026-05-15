@@ -52,8 +52,8 @@ func loadSources(repoRoot string) tea.Cmd {
 		if err != nil {
 			return sourcesLoadedMsg{err: err}
 		}
-		sources, err := backend.ListSources()
-		return sourcesLoadedMsg{sources: tuiSources(sources), err: err}
+		statuses, err := backend.ListSourceStatuses()
+		return sourcesLoadedMsg{sources: tuiSourceStatuses(statuses), err: err}
 	}
 }
 
@@ -103,7 +103,9 @@ func loadInstalled(repoRoot string) tea.Cmd {
 		if err != nil {
 			return installedLoadedMsg{err: err}
 		}
-		rows = mergeInstalledUsageRows(rows, tuiInstalled(usageRows))
+		usageTUIRows := tuiInstalled(usageRows)
+		markMissingInstalledPaths(usageTUIRows)
+		rows = mergeInstalledUsageRows(rows, usageTUIRows)
 		sortInstalledRows(rows)
 		return installedLoadedMsg{rows: rows}
 	}
@@ -120,6 +122,7 @@ func loadUsage(repoRoot string) tea.Cmd {
 			return usageLoadedMsg{err: err}
 		}
 		tuiRows := tuiInstalled(rows)
+		markMissingInstalledPaths(tuiRows)
 		sortInstalledRows(tuiRows)
 		return usageLoadedMsg{rows: tuiRows}
 	}
@@ -277,25 +280,29 @@ func installedRowProjectDir(row InstalledSkill, fallback string) string {
 }
 
 func mergeInstalledUsageRows(rows []InstalledSkill, usageRows []InstalledSkill) []InstalledSkill {
-	seen := map[string]bool{}
 	merged := append([]InstalledSkill(nil), rows...)
-	for i, row := range merged {
-		seen[installedRowKey(row)] = true
-		for _, usageRow := range usageRows {
-			if installedRowKey(row) != installedRowKey(usageRow) {
-				continue
-			}
-			merged[i].ProjectPath = usageRow.ProjectPath
-			merged[i].TargetRoot = usageRow.TargetRoot
-			merged[i].UpdatedAt = usageRow.UpdatedAt
-			merged[i].RegistryOnly = true
-			if strings.TrimSpace(merged[i].InstalledPath) == "" || merged[i].InstalledPath == "-" {
-				merged[i].InstalledPath = usageRow.InstalledPath
-			}
-			if strings.TrimSpace(merged[i].ContentHash) == "" || merged[i].ContentHash == "-" {
-				merged[i].ContentHash = usageRow.ContentHash
-			}
-			break
+	usageByKey := map[string]InstalledSkill{}
+	for _, row := range usageRows {
+		usageByKey[installedRowKey(row)] = row
+	}
+	seen := map[string]bool{}
+	for i := range merged {
+		key := installedRowKey(merged[i])
+		seen[key] = true
+		usageRow, ok := usageByKey[key]
+		if !ok {
+			continue
+		}
+		merged[i].ProjectPath = usageRow.ProjectPath
+		merged[i].TargetRoot = usageRow.TargetRoot
+		merged[i].UpdatedAt = usageRow.UpdatedAt
+		merged[i].RegistryOnly = true
+		merged[i].PathMissing = false
+		if strings.TrimSpace(merged[i].InstalledPath) == "" || merged[i].InstalledPath == "-" {
+			merged[i].InstalledPath = usageRow.InstalledPath
+		}
+		if strings.TrimSpace(merged[i].ContentHash) == "" || merged[i].ContentHash == "-" {
+			merged[i].ContentHash = usageRow.ContentHash
 		}
 	}
 	for _, row := range usageRows {
@@ -307,6 +314,26 @@ func mergeInstalledUsageRows(rows []InstalledSkill, usageRows []InstalledSkill) 
 		merged = append(merged, row)
 	}
 	return merged
+}
+
+func markMissingInstalledPaths(rows []InstalledSkill) {
+	for i := range rows {
+		rows[i].PathMissing = !installedSkillPathExists(rows[i])
+	}
+}
+
+func installedSkillPathExists(row InstalledSkill) bool {
+	path := row.InstalledPath
+	if strings.TrimSpace(path) == "" || path == "-" {
+		path = row.Path
+	}
+	if strings.TrimSpace(path) == "" || path == "-" {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(path, "SKILL.md")); err != nil {
+		return false
+	}
+	return true
 }
 
 func installedRowKey(row InstalledSkill) string {
@@ -401,6 +428,14 @@ func (p installProgressState) currentItem() (installQueueItem, bool) {
 	return p.Items[index], true
 }
 
+func (p sourceSyncProgressState) currentItem() (sourceSyncQueueItem, bool) {
+	index := p.Current - 1
+	if index < 0 || index >= len(p.Items) {
+		return sourceSyncQueueItem{}, false
+	}
+	return p.Items[index], true
+}
+
 func (m model) installProgressStatus() string {
 	item, ok := m.install.progress.currentItem()
 	if !ok {
@@ -412,6 +447,19 @@ func (m model) installProgressStatus() string {
 		m.install.progress.Total,
 		item.Skill,
 		item.Choice.Label,
+	)
+}
+
+func (m model) sourceSyncProgressStatus() string {
+	item, ok := m.sourceProgress.currentItem()
+	if !ok {
+		return "Updating sources..."
+	}
+	return fmt.Sprintf(
+		"Updating %d/%d: %s.",
+		m.sourceProgress.Current,
+		m.sourceProgress.Total,
+		item.Name,
 	)
 }
 
@@ -476,11 +524,26 @@ func runInstallStepCommand(repoRoot string, item installQueueItem, projectDir st
 		if item.Choice.Scope == scopeProject {
 			opts.Project = projectDir
 		}
-		output, err := backend.Install(opts)
+		output, warning, err := backend.Install(opts)
+		output = warning + output
 		if err != nil {
 			return installStepDoneMsg{output: output, err: err}
 		}
 		return installStepDoneMsg{output: output}
+	}
+}
+
+func runSourceSyncStepCommand(repoRoot string, item sourceSyncQueueItem) tea.Cmd {
+	return func() tea.Msg {
+		backend, err := newBackend(repoRoot)
+		if err != nil {
+			return sourceSyncStepDoneMsg{err: err}
+		}
+		output, err := backend.SyncSources(item.Name)
+		if err != nil {
+			return sourceSyncStepDoneMsg{output: output, err: err}
+		}
+		return sourceSyncStepDoneMsg{output: output}
 	}
 }
 
@@ -554,6 +617,25 @@ func tuiSources(rows []core.Source) []SourcePreset {
 	return out
 }
 
+func tuiSourceStatuses(rows []core.SourceStatus) []SourcePreset {
+	out := make([]SourcePreset, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, SourcePreset{
+			Name: row.Name, Type: row.Type, Status: row.Status,
+			LastSyncedAt: formatTUITime(row.LastSyncedAt), CachePath: row.CachePath,
+			Location: row.Location, Ref: row.Ref, Catalog: row.Catalog, Message: row.Message,
+		})
+	}
+	return out
+}
+
+func formatTUITime(value time.Time) string {
+	if value.IsZero() {
+		return "-"
+	}
+	return value.UTC().Format(time.RFC3339)
+}
+
 func tuiTargets(rows []core.Target) []Target {
 	out := make([]Target, 0, len(rows))
 	for _, row := range rows {
@@ -594,13 +676,13 @@ func projectLockStatusFromRestoreRows(rows []core.RestoreRow) ProjectLockStatus 
 	status := ProjectLockStatus{Total: len(rows)}
 	for _, row := range rows {
 		switch row.Status {
-		case "missing":
+		case core.ResultMissing:
 			status.Missing++
 		case "changed":
 			status.Changed++
 		case "skipped":
 			status.Skipped++
-		case "failed":
+		case core.ResultFailed:
 			status.Failed++
 		default:
 			status.Unchanged++

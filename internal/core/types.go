@@ -3,7 +3,9 @@ package core
 import "time"
 
 const (
-	SourcesHeader   = "name\ttype\tlocation\tref\tcatalog"
+	SourcesHeader        = "name\ttype\tlocation\tref\tcatalog"
+	SourceStatusesHeader = "name\ttype\tstatus\tlast_synced_at\tcache_path\t" +
+		"ref\tcatalog\tlocation\tmessage"
 	TargetsHeader   = "id\tlabel\tstatus\tadapter\tdescription"
 	SkillsHeader    = "source\tname\tcategory\ttriggers\tdescription"
 	InstalledHeader = "target\tscope\tskill\tmanaged\tsource\tqualified_skill\tinstalled_path\tcontent_hash\t" +
@@ -33,6 +35,12 @@ const (
 	SourceTypeGit  = "git"
 	SourceTypePath = "path"
 
+	SourceStatusLocal   = "local"
+	SourceStatusFresh   = "fresh"
+	SourceStatusStale   = "stale"
+	SourceStatusMissing = "missing"
+	SourceStatusError   = "error"
+
 	ManagedYes = "yes"
 	ManagedNo  = "no"
 
@@ -57,6 +65,18 @@ type Source struct {
 	Location string
 	Ref      string
 	Catalog  string
+}
+
+type SourceStatus struct {
+	Name         string
+	Type         string
+	Status       string
+	LastSyncedAt time.Time
+	CachePath    string
+	Ref          string
+	Catalog      string
+	Location     string
+	Message      string
 }
 
 type Skill struct {

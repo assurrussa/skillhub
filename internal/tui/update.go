@@ -16,6 +16,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ensureInstalledCursorVisible()
 		m.ensureUsageCursorVisible()
 		m.ensureUsageDetailCursorVisible()
+		m.ensureSourceCursorVisible()
 		m.ensureTargetCursorVisible()
 		return m, nil
 	case spinnerTickMsg:
@@ -40,6 +41,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateLockStatusLoaded(msg)
 	case installStepDoneMsg:
 		return m.updateInstallStepDone(msg)
+	case sourceSyncStepDoneMsg:
+		return m.updateSourceSyncStepDone(msg)
 	case commandDoneMsg:
 		return m.updateCommandDone(msg)
 	case tea.KeyMsg:
@@ -101,7 +104,14 @@ func (m model) updateSourcesLoaded(msg sourcesLoadedMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.sources = msg.sources
-	m.status = fmt.Sprintf("Loaded %d active source(s).", len(m.sources))
+	m.sourceCursor = clampCursor(m.sourceCursor, len(m.sources))
+	m.ensureSourceCursorVisible()
+	if strings.TrimSpace(m.postReloadStatus) != "" {
+		m.status = m.postReloadStatus
+		m.postReloadStatus = ""
+	} else {
+		m.status = fmt.Sprintf("Loaded %d active source(s).", len(m.sources))
+	}
 	return m, nil
 }
 
@@ -197,7 +207,7 @@ func (m model) updateTargetsLoaded(msg targetsLoadedMsg) (tea.Model, tea.Cmd) {
 	m.targetCursor = clampCursor(m.targetCursor, len(m.install.targetChoices))
 	m.ensureTargetCursorVisible()
 	if m.install.targetPurpose == targetPurposeInstall {
-		m.status = fmt.Sprintf("Choose agents for %d selected skill(s).", len(m.selected))
+		m.status = fmt.Sprintf("Choose agents for %d queued skill(s).", len(m.selected))
 	} else {
 		m.status = "Loaded target paths."
 	}
@@ -236,6 +246,38 @@ func (m model) updateInstallStepDone(msg installStepDoneMsg) (tea.Model, tea.Cmd
 	item, _ := m.install.progress.currentItem()
 	m.status = m.installProgressStatus()
 	return m, tea.Batch(runInstallStepCommand(m.repoRoot, item, m.projectDir), busyTick())
+}
+
+func (m model) updateSourceSyncStepDone(msg sourceSyncStepDoneMsg) (tea.Model, tea.Cmd) {
+	if strings.TrimSpace(msg.output) != "" {
+		m.sourceProgress.LastLine = lastOutputLine(msg.output)
+	}
+	if msg.err != nil {
+		m.busy = false
+		m.sourceProgress.Failed = true
+		m.sourceProgress.Error = msg.err.Error()
+		m.status = fmt.Sprintf("Source update failed at %d/%d.", m.sourceProgress.Current, m.sourceProgress.Total)
+		return m, nil
+	}
+	m.sourceProgress.Completed++
+	if m.sourceProgress.Completed >= m.sourceProgress.Total {
+		return m.finishSourceSyncProgress()
+	}
+	m.sourceProgress.Current = m.sourceProgress.Completed + 1
+	item, _ := m.sourceProgress.currentItem()
+	m.status = m.sourceSyncProgressStatus()
+	return m, tea.Batch(runSourceSyncStepCommand(m.repoRoot, item), busyTick())
+}
+
+func (m model) finishSourceSyncProgress() (tea.Model, tea.Cmd) {
+	total := m.sourceProgress.Total
+	m.busy = false
+	m.sourceProgress = sourceSyncProgressState{}
+	m.loading = true
+	m.viewMode = viewSources
+	m.postReloadStatus = fmt.Sprintf("Updated %d source(s).", total)
+	m.status = "Reloading sources..."
+	return m, loadSources(m.repoRoot)
 }
 
 func (m model) finishInstallProgress() (tea.Model, tea.Cmd) {
@@ -339,6 +381,10 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if m.usageFilterMode {
 		return m.updateUsageFilterKey(msg)
+	}
+
+	if m.sourceProgress.Failed {
+		return m.updateFailedSourceProgressKey(msg)
 	}
 
 	if m.install.progress.Failed {
@@ -474,6 +520,25 @@ func (m model) updateBusyKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m model) updateFailedSourceProgressKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q":
+		return m, tea.Quit
+	case keyEsc, keyEnter:
+		errorMessage := strings.TrimSpace(m.sourceProgress.Error)
+		m.sourceProgress = sourceSyncProgressState{}
+		m.viewMode = viewSources
+		if errorMessage != "" {
+			m.status = "Source update failed: " + errorMessage
+		} else {
+			m.status = "Source update failed."
+		}
+		return m, nil
+	default:
+		return m, nil
+	}
+}
+
 func (m model) updateGlobalKey(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "?":
@@ -552,11 +617,11 @@ func (m model) updateSkillsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		for _, idx := range m.filtered {
 			m.selected[m.skills[idx].Key()] = true
 		}
-		m.status = fmt.Sprintf("Selected %d visible skill(s).", len(m.filtered))
+		m.status = fmt.Sprintf("Queued %d visible skill(s).", len(m.filtered))
 		return m, nil
 	case "c":
 		m.selected = map[string]bool{}
-		m.status = "Selection cleared."
+		m.status = "Install queue cleared."
 		return m, nil
 	case "i":
 		return m.installSelected()
@@ -576,9 +641,8 @@ func (m model) updateSkillsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		return m.reloadCurrentView("Reloading catalog...")
 	case "s":
-		m.busy = true
-		m.status = statusSyncing
-		return m, tea.Batch(runSourceCommand(m.repoRoot, "Sync", "sync"), busyTick())
+		m.status = "Open 4 Sources to update source caches."
+		return m, nil
 	default:
 		return m, nil
 	}
@@ -587,7 +651,7 @@ func (m model) updateSkillsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) installSelected() (tea.Model, tea.Cmd) {
 	names := m.selectedNames()
 	if len(names) == 0 {
-		m.status = "Select at least one skill before installing."
+		m.status = "Queue at least one skill before installing."
 		return m, nil
 	}
 	return m.openInstallScope()
@@ -603,7 +667,7 @@ func (m model) openInstallScope() (tea.Model, tea.Cmd) {
 	m.install.targetChoices = nil
 	m.install.selectedTargets = map[string]bool{}
 	m.viewMode = viewInstallScope
-	m.status = fmt.Sprintf("Choose install scope for %d selected skill(s).", len(m.selectedNames()))
+	m.status = fmt.Sprintf("Choose install scope for %d queued skill(s).", len(m.selectedNames()))
 	return m, nil
 }
 
@@ -740,7 +804,7 @@ func (m model) canMoveDashboardSection() bool {
 func (m model) installToSelectedTargets() (tea.Model, tea.Cmd) {
 	names := m.selectedNames()
 	if len(names) == 0 {
-		m.status = "Select at least one skill before installing."
+		m.status = "Queue at least one skill before installing."
 		return m, nil
 	}
 	choices := m.selectedTargetChoices()
@@ -811,27 +875,37 @@ func (m model) updateInstalledKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case keyDown, "j":
-		if m.installedCursor < len(m.installedRows)-1 {
+		if m.installedCursor < len(m.installedSummaries())-1 {
 			m.installedCursor++
 			m.ensureInstalledCursorVisible()
 		}
 		return m, nil
 	case "u":
-		row, ok := m.currentInstalled()
+		summary, ok := m.currentInstalledSummary()
 		if !ok {
-			m.status = "No installed target selected."
+			m.status = "No installed skill selected."
 			return m, nil
 		}
+		if len(summary.Rows) != 1 {
+			m.status = "Open locations to update one installed target."
+			return m, nil
+		}
+		row := summary.Row
 		m.busy = true
 		m.status = fmt.Sprintf("Updating %s/%s managed skills...", row.Target, row.Scope)
 		cmd := runInstalledCommand(m.repoRoot, "Update installed", installedUpdateArgsForRow(row, m.projectDir)...)
 		return m, tea.Batch(cmd, busyTick())
 	case "x":
-		row, ok := m.currentInstalled()
+		summary, ok := m.currentInstalledSummary()
 		if !ok {
 			m.status = "No installed skill selected."
 			return m, nil
 		}
+		if len(summary.Rows) != 1 {
+			m.status = "Open locations to uninstall one installed target."
+			return m, nil
+		}
+		row := summary.Row
 		if row.Managed != managedYes {
 			m.status = "Unmanaged skills are read-only in TUI. Use CLI --force if needed."
 			return m, nil
@@ -1134,6 +1208,18 @@ func (m model) updateSourcesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q":
 		return m, tea.Quit
+	case "up", "k":
+		if m.sourceCursor > 0 {
+			m.sourceCursor--
+			m.ensureSourceCursorVisible()
+		}
+		return m, nil
+	case keyDown, "j":
+		if m.sourceCursor < len(m.sources)-1 {
+			m.sourceCursor++
+			m.ensureSourceCursorVisible()
+		}
+		return m, nil
 	case "d":
 		m.loading = true
 		m.status = "Loading source defaults..."
@@ -1145,16 +1231,46 @@ func (m model) updateSourcesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.viewMode = viewAddSource
 		m.status = statusEnterSource
 		return m, nil
-	case "s":
-		m.busy = true
-		m.reloadOnFinish = true
-		m.status = statusSyncing
-		return m, tea.Batch(runSourceCommand(m.repoRoot, "Sync", "sync"), busyTick())
+	case "u":
+		source, ok := m.currentSource()
+		if !ok {
+			m.status = "No source selected."
+			return m, nil
+		}
+		return m.startSourceSyncProgress([]SourcePreset{source})
+	case "U", "s":
+		if len(m.sources) == 0 {
+			m.status = "No sources configured."
+			return m, nil
+		}
+		return m.startSourceSyncProgress(m.sources)
 	case "r":
 		return m.reloadCurrentView("Reloading sources...")
 	default:
 		return m, nil
 	}
+}
+
+func (m model) startSourceSyncProgress(sources []SourcePreset) (tea.Model, tea.Cmd) {
+	queue := make([]sourceSyncQueueItem, 0, len(sources))
+	for _, source := range sources {
+		queue = append(queue, sourceSyncQueueItem{Name: source.Name})
+	}
+	if len(queue) == 0 {
+		m.status = "No sources configured."
+		return m, nil
+	}
+	m.busy = true
+	m.loading = false
+	m.viewMode = viewSources
+	m.sourceProgress = sourceSyncProgressState{
+		Items:   queue,
+		Current: 1,
+		Total:   len(queue),
+	}
+	item, _ := m.sourceProgress.currentItem()
+	m.status = m.sourceSyncProgressStatus()
+	return m, tea.Batch(runSourceSyncStepCommand(m.repoRoot, item), busyTick())
 }
 
 func (m model) updateUpdateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

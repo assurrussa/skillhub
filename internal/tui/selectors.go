@@ -128,6 +128,8 @@ func (m *model) ensureCursorVisible() {
 
 func (m *model) ensureInstalledCursorVisible() {
 	visible := m.installedVisibleCount()
+	total := len(m.installedSummaries())
+	m.installedCursor = clampCursor(m.installedCursor, total)
 	if m.installedCursor < m.installedOffset {
 		m.installedOffset = m.installedCursor
 	}
@@ -137,7 +139,7 @@ func (m *model) ensureInstalledCursorVisible() {
 	if m.installedOffset < 0 {
 		m.installedOffset = 0
 	}
-	maxOffset := len(m.installedRows) - visible
+	maxOffset := total - visible
 	if maxOffset < 0 {
 		maxOffset = 0
 	}
@@ -204,6 +206,37 @@ func (m *model) ensureUsageDetailCursorVisible() {
 	if m.usageDetailOffset > maxOffset {
 		m.usageDetailOffset = maxOffset
 	}
+}
+
+func (m *model) ensureSourceCursorVisible() {
+	visible := m.sourceVisibleCount()
+	if m.sourceCursor < m.sourceOffset {
+		m.sourceOffset = m.sourceCursor
+	}
+	if m.sourceCursor >= m.sourceOffset+visible {
+		m.sourceOffset = m.sourceCursor - visible + 1
+	}
+	if m.sourceOffset < 0 {
+		m.sourceOffset = 0
+	}
+	maxOffset := len(m.sources) - visible
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if m.sourceOffset > maxOffset {
+		m.sourceOffset = maxOffset
+	}
+}
+
+func (m model) sourceVisibleCount() int {
+	if m.height <= 0 {
+		return 5
+	}
+	count := (m.height - 14) / 5
+	if count < 1 {
+		return 1
+	}
+	return count
 }
 
 func (m model) visibleCount() int {
@@ -306,6 +339,13 @@ func (m model) targetVisibleCount() int {
 	return count
 }
 
+func (m model) currentSource() (SourcePreset, bool) {
+	if len(m.sources) == 0 || m.sourceCursor < 0 || m.sourceCursor >= len(m.sources) {
+		return SourcePreset{}, false
+	}
+	return m.sources[m.sourceCursor], true
+}
+
 func (m *model) toggleCurrent() {
 	if len(m.filtered) == 0 {
 		return
@@ -314,10 +354,10 @@ func (m *model) toggleCurrent() {
 	key := skill.Key()
 	if m.selected[key] {
 		delete(m.selected, key)
-		m.status = "Unselected " + key + "."
+		m.status = "Removed " + key + " from install queue."
 	} else {
 		m.selected[key] = true
-		m.status = "Selected " + key + "."
+		m.status = "Queued " + key + " for install."
 	}
 }
 
@@ -350,10 +390,19 @@ func (m model) currentSkill() (Skill, bool) {
 }
 
 func (m model) currentInstalled() (InstalledSkill, bool) {
-	if len(m.installedRows) == 0 || m.installedCursor < 0 || m.installedCursor >= len(m.installedRows) {
+	summaries := m.installedSummaries()
+	if len(summaries) == 0 || m.installedCursor < 0 || m.installedCursor >= len(summaries) {
 		return InstalledSkill{}, false
 	}
-	return m.installedRows[m.installedCursor], true
+	return summaries[m.installedCursor].Row, true
+}
+
+func (m model) currentInstalledSummary() (installedSummary, bool) {
+	summaries := m.installedSummaries()
+	if len(summaries) == 0 || m.installedCursor < 0 || m.installedCursor >= len(summaries) {
+		return installedSummary{}, false
+	}
+	return summaries[m.installedCursor], true
 }
 
 func (m model) currentInstalledDetail() (InstalledSkill, bool) {
@@ -522,8 +571,69 @@ func installedOverviewStats(rows []InstalledSkill) installedStats {
 	return stats
 }
 
+type installedSummary struct {
+	Key           string
+	Row           InstalledSkill
+	Rows          []InstalledSkill
+	ManagedCount  int
+	RegistryCount int
+	MissingCount  int
+	ProjectCount  int
+	TargetLabels  []string
+}
+
+func (m model) installedSummaries() []installedSummary {
+	return buildInstalledSummaries(m.installedRows)
+}
+
+func buildInstalledSummaries(rows []InstalledSkill) []installedSummary {
+	grouped := map[string][]InstalledSkill{}
+	order := []string{}
+	for _, row := range rows {
+		key := installedSkillKey(row)
+		if _, ok := grouped[key]; !ok {
+			order = append(order, key)
+		}
+		grouped[key] = append(grouped[key], row)
+	}
+	summaries := make([]installedSummary, 0, len(grouped))
+	for _, key := range order {
+		group := grouped[key]
+		sortInstalledRows(group)
+		summaries = append(summaries, summarizeInstalledRows(key, group))
+	}
+	return summaries
+}
+
+func summarizeInstalledRows(key string, rows []InstalledSkill) installedSummary {
+	summary := installedSummary{Key: key, Row: rows[0], Rows: append([]InstalledSkill(nil), rows...)}
+	projects := map[string]bool{}
+	labels := map[string]bool{}
+	for _, row := range rows {
+		if row.Managed == managedYes {
+			summary.ManagedCount++
+		}
+		if row.RegistryOnly {
+			summary.RegistryCount++
+		}
+		if row.PathMissing {
+			summary.MissingCount++
+		}
+		if row.Scope == scopeProject && strings.TrimSpace(row.ProjectPath) != "" && row.ProjectPath != "-" {
+			projects[row.ProjectPath] = true
+		}
+		label := targetScopeLabel(row.Target, row.Scope)
+		if !labels[label] {
+			labels[label] = true
+			summary.TargetLabels = append(summary.TargetLabels, label)
+		}
+	}
+	summary.ProjectCount = len(projects)
+	return summary
+}
+
 func (m model) installedRangeLabel() string {
-	total := len(m.installedRows)
+	total := len(m.installedSummaries())
 	if total == 0 {
 		return "Showing 0/0"
 	}
@@ -545,13 +655,22 @@ func (m *model) focusInstallResultRows() {
 	for _, name := range m.install.result.SkillNames {
 		wanted[name] = true
 	}
-	for i, row := range m.installedRows {
-		if installedRowMatchesAnyName(row, wanted) {
+	for i, summary := range m.installedSummaries() {
+		if installedSummaryMatchesAnyName(summary, wanted) {
 			m.installedCursor = i
 			m.installedOffset = i
 			return
 		}
 	}
+}
+
+func installedSummaryMatchesAnyName(summary installedSummary, wanted map[string]bool) bool {
+	for _, row := range summary.Rows {
+		if installedRowMatchesAnyName(row, wanted) {
+			return true
+		}
+	}
+	return false
 }
 
 func installedRowMatchesAnyName(row InstalledSkill, wanted map[string]bool) bool {

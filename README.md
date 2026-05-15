@@ -12,7 +12,7 @@ the Unix installer and self-update entrypoint.
 
 ## Why Skillhub
 
-- Find skills from configured sources, search the catalog, and install selected
+- Find skills from configured sources, search the catalog, and install queued
   skills into supported agents and scopes without manually copying files.
 - Keep Skillhub-managed skills updateable, including project-local installs.
   When a skill is installed through Skillhub from a source, metadata and usage
@@ -96,11 +96,11 @@ skillhub sources list
 
 Git sources are cached under `${SKILLHUB_CACHE_DIR:-$HOME/.cache/skillhub}`.
 Catalog commands (`skills list/search`, `recommend`, ordinary `install`, and
-the TUI Skills screen) read from that local cache and refresh a git source only
-when the last successful sync is older than 10 minutes or the cache is missing.
-If a refresh fails but a cached catalog exists, Skillhub keeps working from the
-stale cache and prints a warning. Use `skillhub sources sync [source]` whenever
-you need an immediate forced refresh.
+the TUI Skills screen) are cache-first and do not run implicit `git fetch`,
+`git clone`, or `git pull`. Stale cached catalogs remain usable with a warning.
+Missing git caches fail with a hint to run `skillhub sources sync <source>`.
+Use `skillhub sources sync [source]`, or update sources from the TUI Sources
+screen, whenever you need fresh source data.
 
 Sources can either provide a native `catalog/skills.tsv` plus flat
 `skills/<name>/SKILL.md` directories, a nested `skills/**/SKILL.md` tree, or
@@ -145,6 +145,8 @@ SKILLHUB_AGENT_RULES_PATH=../agent-rules skillhub skills list
 ```sh
 skillhub sources list
 skillhub sources list --tsv
+skillhub sources status
+skillhub sources status --tsv
 skillhub sources sync agent-rules
 skillhub sources defaults list
 skillhub sources defaults add agent-rules
@@ -211,19 +213,19 @@ In the TUI:
 1/2/3/4/5/6 switch sections
 left/right switch sections
 j/k       move
-space     select/unselect
+space     queue/unqueue skill for install
 enter     open highlighted details
 /         search skills or filter usage
-a         select all visible skills
-c         clear selection
+a         queue all visible skills
+c         clear install queue
 d         open recommended source presets
 n         add custom source path or git URL
 t         open target paths
-i         install selected skills
-u         update highlighted install or usage entry
-U         update all visible project usage entries
+i         install queued skills
+u         update highlighted install, usage, or source entry
+U         update all visible project usage entries, or all sources in Sources
 x         uninstall highlighted managed skill
-s         sync sources
+s         update all sources in Sources
 r         reload current section, or restore project lockfile in Update
 ?         help
 q         quit
@@ -231,10 +233,10 @@ q         quit
 
 The TUI opens as an installed-first dashboard with sections for installed
 skills, catalog skills, managed usage, sources, targets, and update commands.
-The Skills section keeps the readable category tree and green `[✓]` selection
-marker, and shows compact installed badges for managed skills that are already
-present in any target. Press `i` after selecting skills to open the install
-wizard: choose `Project` or `User` scope, select one or more supported
+The Skills section keeps the readable category tree and green `[+]` install
+queue marker, and shows compact installed badges for managed skills whose
+target directory still exists. Press `i` after queueing skills to open the
+install wizard: choose `Project` or `User` scope, select one or more supported
 assistants, review the target paths, then confirm. During install the TUI runs
 one skill-target step at a time and shows the current step, queue state,
 spinner, progress bar, and last result line.
@@ -250,12 +252,15 @@ location for that skill. Press `/` to filter by source, skill, target, scope,
 project root, or install path. Press `u` to update the highlighted skill or
 location, and `U` to update all visible recorded project-scope installs.
 
-The Sources section shows active sources, recommended presets, custom source
-entry, and source sync. The Skills screen uses the local source cache and a
-10-minute git-source TTL, so opening the catalog does not block on network on
-every visit; press `s` in Sources when you want an immediate refresh. The
-Update section intentionally does not run self-update from inside the TUI; it
-shows project lockfile status, restores the current project lockfile with `r`,
+The Sources section shows active source freshness, last sync time, cache path,
+configured ref/catalog/location, recommended presets, custom source entry, and
+source updates. Press `j/k` to move between active sources, `u` to update the
+highlighted source, or `U`/`s` to update all active sources. Updates run one
+source at a time with a progress panel, queue state, spinner, progress bar, and
+last result/error. The Skills screen reads only the local source cache; opening
+the catalog never performs git network work. The Update section intentionally
+does not run self-update from inside the TUI; it shows project lockfile status,
+restores the current project lockfile with `r`,
 and shows the exact CLI commands for `skillhub update`, cascade update, managed
 skill update, and restore.
 

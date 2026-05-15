@@ -9,11 +9,15 @@ type Skill struct {
 }
 
 type SourcePreset struct {
-	Name     string
-	Type     string
-	Location string
-	Ref      string
-	Catalog  string
+	Name         string
+	Type         string
+	Status       string
+	LastSyncedAt string
+	CachePath    string
+	Location     string
+	Ref          string
+	Catalog      string
+	Message      string
 }
 type InstalledSkill struct {
 	Target         string
@@ -30,6 +34,7 @@ type InstalledSkill struct {
 	UpdatedAt      string
 	Path           string
 	RegistryOnly   bool
+	PathMissing    bool
 }
 
 type Target struct {

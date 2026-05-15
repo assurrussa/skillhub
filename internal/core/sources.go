@@ -51,6 +51,125 @@ func (b *Backend) ListDefaultSources() ([]Source, error) {
 	return validateSources(rows)
 }
 
+func (b *Backend) ListSourceStatuses() ([]SourceStatus, error) {
+	sources, err := b.ListSources()
+	if err != nil {
+		return nil, err
+	}
+	statuses := make([]SourceStatus, 0, len(sources))
+	for _, source := range sources {
+		statuses = append(statuses, b.sourceStatus(source))
+	}
+	return statuses, nil
+}
+
+func (b *Backend) sourceStatus(source Source) SourceStatus {
+	status := SourceStatus{
+		Name:     source.Name,
+		Type:     source.Type,
+		Ref:      source.Ref,
+		Catalog:  source.Catalog,
+		Location: source.Location,
+	}
+	sourcePath, err := b.SourcePath(source)
+	if err != nil {
+		status.Status = SourceStatusError
+		status.Message = err.Error()
+		return status
+	}
+	status.CachePath = sourcePath
+	if isLocalSourceOverride(source, b.envValue("SKILLHUB_AGENT_RULES_PATH")) || source.Type == SourceTypePath {
+		return b.localSourceStatus(source, sourcePath, status)
+	}
+	if source.Type != SourceTypeGit {
+		status.Status = SourceStatusError
+		status.Message = "unsupported source type: " + source.Type
+		return status
+	}
+	return b.gitSourceStatus(source, sourcePath, status)
+}
+
+func (b *Backend) localSourceStatus(source Source, sourcePath string, status SourceStatus) SourceStatus {
+	if info, err := os.Stat(sourcePath); err != nil || !info.IsDir() {
+		status.Status = SourceStatusError
+		status.Message = "path source does not exist: " + sourcePath
+		return status
+	}
+	if _, err := os.Stat(filepath.Join(sourcePath, source.Catalog)); err == nil {
+		status.Status = SourceStatusLocal
+		status.Message = "local source catalog is available"
+		return status
+	}
+	if generatedPath, ok := b.generatedCatalogPath(source.Name, source.Catalog); ok {
+		status.Status = SourceStatusLocal
+		status.CachePath = generatedPath
+		status.Message = "local source materialized catalog is available"
+		return status
+	}
+	if b.sourceHasDiscoverableSkills(sourcePath) {
+		status.Status = SourceStatusLocal
+		status.Message = "local source has discoverable skills"
+		return status
+	}
+	status.Status = SourceStatusError
+	status.Message = missingSourceCatalogError(source.Name, sourcePath, source.Catalog).Error()
+	return status
+}
+
+func (b *Backend) gitSourceStatus(source Source, sourcePath string, status SourceStatus) SourceStatus {
+	syncedAt, hasSync, syncErr := b.readSourceSyncedAt(source.Name)
+	if syncErr != nil {
+		status.Status = SourceStatusError
+		status.Message = syncErr.Error()
+		return status
+	}
+	if hasSync {
+		status.LastSyncedAt = syncedAt
+	}
+	if err := b.cachedGitOriginError(source, sourcePath); err != nil {
+		status.Status = SourceStatusError
+		status.Message = err.Error()
+		return status
+	}
+	cachePath, hasCatalog := b.cachedCatalogPath(source, sourcePath)
+	if !hasCatalog {
+		status.Status = SourceStatusMissing
+		status.Message = "cache missing. Run: skillhub sources sync " + source.Name
+		return status
+	}
+	status.CachePath = cachePath
+	if !hasSync || !b.sourceSyncTimeIsFresh(syncedAt) {
+		status.Status = SourceStatusStale
+		status.Message = "cache is stale. Run: skillhub sources sync " + source.Name
+		return status
+	}
+	status.Status = SourceStatusFresh
+	status.Message = "cache is fresh"
+	return status
+}
+
+func (b *Backend) cachedCatalogPath(source Source, sourcePath string) (string, bool) {
+	if _, err := os.Stat(filepath.Join(sourcePath, source.Catalog)); err == nil {
+		return sourcePath, true
+	}
+	return b.generatedCatalogPath(source.Name, source.Catalog)
+}
+
+func (b *Backend) generatedCatalogPath(sourceName string, sourceCatalog string) (string, bool) {
+	generatedPath, err := b.generatedSourcePath(sourceName)
+	if err != nil {
+		return "", false
+	}
+	if _, err := os.Stat(filepath.Join(generatedPath, sourceCatalog)); err == nil {
+		return generatedPath, true
+	}
+	return "", false
+}
+
+func isLocalSourceOverride(source Source, override string) bool {
+	return source.Name == SourceNameAgentRules && strings.TrimSpace(override) != ""
+}
+
 func validateSources(rows []Source) ([]Source, error) {
 	seen := map[string]bool{}
 	for _, source := range rows {
@@ -301,7 +420,7 @@ func (b *Backend) SyncSources(name string) (string, error) {
 }
 
 func (b *Backend) SourcePath(source Source) (string, error) {
-	if source.Name == SourceNameAgentRules && strings.TrimSpace(b.envValue("SKILLHUB_AGENT_RULES_PATH")) != "" {
+	if isLocalSourceOverride(source, b.envValue("SKILLHUB_AGENT_RULES_PATH")) {
 		return b.envValue("SKILLHUB_AGENT_RULES_PATH"), nil
 	}
 	switch source.Type {
@@ -322,7 +441,7 @@ func (b *Backend) CatalogSource(source Source) (path, warning string, err error)
 	if err != nil {
 		return "", "", err
 	}
-	if source.Name == SourceNameAgentRules && strings.TrimSpace(b.envValue("SKILLHUB_AGENT_RULES_PATH")) != "" {
+	if isLocalSourceOverride(source, b.envValue("SKILLHUB_AGENT_RULES_PATH")) {
 		if info, err := os.Stat(sourcePath); err != nil || !info.IsDir() {
 			return "", "", fmt.Errorf("local source override does not exist: %s", sourcePath)
 		}
@@ -336,26 +455,21 @@ func (b *Backend) CatalogSource(source Source) (path, warning string, err error)
 		path, err = b.materializeSource(source.Name, sourcePath, source.Catalog, true)
 		return path, "", err
 	case SourceTypeGit:
-		if materialized, err := b.materializeSource(source.Name, sourcePath, source.Catalog, false); err == nil {
-			if b.sourceSyncIsFresh(source.Name) && b.cachedGitOriginMatches(sourcePath, source.Location) {
-				if _, err := os.Stat(filepath.Join(materialized, source.Catalog)); err == nil {
-					return materialized, "", nil
-				}
-			}
+		if err := b.cachedGitOriginError(source, sourcePath); err != nil {
+			return "", "", err
 		}
-		synced, err := b.syncSource(source)
+		materialized, err := b.materializeSource(source.Name, sourcePath, source.Catalog, false)
 		if err == nil {
-			path, err = b.materializeSource(source.Name, synced, source.Catalog, true)
-			return path, "", err
-		}
-		if materialized, matErr := b.materializeSource(source.Name, sourcePath, source.Catalog, false); matErr == nil {
 			if _, statErr := os.Stat(filepath.Join(materialized, source.Catalog)); statErr == nil {
-				warning := fmt.Sprintf(
-					"Warning: using stale cache for source %s; refresh failed. Run: skillhub sources sync %s\n",
-					source.Name,
-					source.Name,
-				)
-				return materialized, warning, nil
+				if !b.sourceSyncIsFresh(source.Name) {
+					warning := fmt.Sprintf(
+						"Warning: using stale cache for source %s. Run: skillhub sources sync %s\n",
+						source.Name,
+						source.Name,
+					)
+					return materialized, warning, nil
+				}
+				return materialized, "", nil
 			}
 		}
 		return "", "", fmt.Errorf(
@@ -383,7 +497,7 @@ func (b *Backend) syncSource(source Source) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if source.Name == SourceNameAgentRules && strings.TrimSpace(b.envValue("SKILLHUB_AGENT_RULES_PATH")) != "" {
+	if isLocalSourceOverride(source, b.envValue("SKILLHUB_AGENT_RULES_PATH")) {
 		if info, err := os.Stat(sourcePath); err != nil || !info.IsDir() {
 			return "", fmt.Errorf("local source override does not exist: %s", sourcePath)
 		}
@@ -491,31 +605,58 @@ func (b *Backend) markSourceSynced(name string) error {
 }
 
 func (b *Backend) sourceSyncIsFresh(name string) bool {
+	syncedAt, ok, err := b.readSourceSyncedAt(name)
+	if err != nil || !ok {
+		return false
+	}
+	return b.sourceSyncTimeIsFresh(syncedAt)
+}
+
+func (b *Backend) readSourceSyncedAt(name string) (time.Time, bool, error) {
 	file, err := b.sourceSyncStateFile(name)
 	if err != nil {
-		return false
+		return time.Time{}, false, err
 	}
 	data, err := os.ReadFile(file)
 	if err != nil {
-		return false
+		if os.IsNotExist(err) {
+			return time.Time{}, false, nil
+		}
+		return time.Time{}, false, err
 	}
 	seconds, parseErr := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
 	if parseErr != nil {
-		return false
+		return time.Time{}, false, fmt.Errorf("invalid source sync timestamp for %s: %w", name, parseErr)
 	}
-	syncedAt := time.Unix(seconds, 0)
+	return time.Unix(seconds, 0).UTC(), true, nil
+}
+
+func (b *Backend) sourceSyncTimeIsFresh(syncedAt time.Time) bool {
 	if b.now().Before(syncedAt) {
 		return true
 	}
 	return b.now().Sub(syncedAt) < sourceTTL
 }
 
-func (b *Backend) cachedGitOriginMatches(sourcePath, location string) bool {
+func (b *Backend) cachedGitOriginError(source Source, sourcePath string) error {
 	if _, err := os.Stat(filepath.Join(sourcePath, ".git")); err != nil {
-		return true
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
 	}
 	origin, err := b.gitOutput(sourcePath, "remote", "get-url", "origin")
-	return err == nil && strings.TrimSpace(origin) == location
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(origin) == source.Location {
+		return nil
+	}
+	return fmt.Errorf(
+		"cached git origin for %s does not match configured location. Run: skillhub sources sync %s",
+		source.Name,
+		source.Name,
+	)
 }
 
 func (b *Backend) clearSourceCache(name string) error {
@@ -541,9 +682,6 @@ func (b *Backend) materializeSource(sourceName, sourcePath, sourceCatalog string
 		_ = os.RemoveAll(generatedPath)
 		return sourcePath, nil
 	}
-	if !b.sourceHasDiscoverableSkills(sourcePath) {
-		return "", missingSourceCatalogError(sourceName, sourcePath, sourceCatalog)
-	}
 	generatedPath, err := b.generatedSourcePath(sourceName)
 	if err != nil {
 		return "", err
@@ -552,6 +690,9 @@ func (b *Backend) materializeSource(sourceName, sourcePath, sourceCatalog string
 		if _, err := os.Stat(filepath.Join(generatedPath, sourceCatalog)); err == nil {
 			return generatedPath, nil
 		}
+	}
+	if !b.sourceHasDiscoverableSkills(sourcePath) {
+		return "", missingSourceCatalogError(sourceName, sourcePath, sourceCatalog)
 	}
 	tmpPath := fmt.Sprintf("%s.%d", generatedPath, os.Getpid())
 	if err := os.RemoveAll(tmpPath); err != nil {

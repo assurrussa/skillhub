@@ -106,9 +106,6 @@ func (b *Backend) countSkillDirs(root, scope string) (total, managed int) {
 		managedPaths[row.InstalledPath] = true
 	}
 	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
 		dir := filepath.Join(root, entry.Name())
 		if _, err := os.Stat(filepath.Join(dir, "SKILL.md")); err != nil {
 			continue

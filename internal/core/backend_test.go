@@ -5,12 +5,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/assurrussa/skillhub/internal/core"
 )
+
+const ruleSelector = "rules-selector"
 
 func writeCoreRepo(t *testing.T, root string) {
 	t.Helper()
@@ -74,6 +77,18 @@ func writeCoreSources(t *testing.T, configDir, sourceDir string) {
 	sources := core.SourcesHeader + "\nlocal\tpath\t" + sourceDir + "\t-\tcatalog/skills.tsv\n"
 	if err := os.WriteFile(filepath.Join(configDir, "sources.tsv"), []byte(sources), 0o644); err != nil {
 		t.Fatalf("write sources: %v", err)
+	}
+}
+
+func writeCoreSourceSyncedAt(t *testing.T, cacheDir, name string, at time.Time) {
+	t.Helper()
+	stateDir := filepath.Join(cacheDir, "source-state")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir source state: %v", err)
+	}
+	data := []byte(strconv.FormatInt(at.Unix(), 10) + "\n")
+	if err := os.WriteFile(filepath.Join(stateDir, name+".synced_at"), data, 0o644); err != nil {
+		t.Fatalf("write source sync state: %v", err)
 	}
 }
 
@@ -196,6 +211,143 @@ func TestCoreAddGitSourceSupportsTagRef(t *testing.T) {
 	}
 }
 
+func TestCoreListSourceStatusesReturnsFreshStaleMissingLocal(t *testing.T) {
+	tmp := t.TempDir()
+	repo := filepath.Join(tmp, "repo")
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	localSource := filepath.Join(tmp, "local-source")
+	writeCoreRepo(t, repo)
+	writeCoreCatalog(t, localSource, "local-rules")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config: %v", err)
+	}
+	sources := core.SourcesHeader + "\n" +
+		"local\tpath\t" + localSource + "\t-\tcatalog/skills.tsv\n" +
+		"fresh\tgit\t" + filepath.Join(tmp, "fresh-remote") + "\tmain\tcatalog/skills.tsv\n" +
+		"stale\tgit\t" + filepath.Join(tmp, "stale-remote") + "\tmain\tcatalog/skills.tsv\n" +
+		"missing\tgit\t" + filepath.Join(tmp, "missing-remote") + "\tmain\tcatalog/skills.tsv\n"
+	if err := os.WriteFile(filepath.Join(configDir, "sources.tsv"), []byte(sources), 0o644); err != nil {
+		t.Fatalf("write sources: %v", err)
+	}
+	writeCoreCatalog(t, filepath.Join(cacheDir, "sources", "fresh"), "fresh-rules")
+	writeCoreCatalog(t, filepath.Join(cacheDir, "sources", "stale"), "stale-rules")
+	now := time.Date(2026, 5, 14, 10, 0, 0, 0, time.UTC)
+	writeCoreSourceSyncedAt(t, cacheDir, "fresh", now)
+	writeCoreSourceSyncedAt(t, cacheDir, "stale", now.Add(-11*time.Minute))
+	backend := coreBackend(t, repo, tmp, configDir, cacheDir, nil)
+
+	statuses, err := backend.ListSourceStatuses()
+	if err != nil {
+		t.Fatalf("list source statuses: %v", err)
+	}
+	got := map[string]string{}
+	for _, status := range statuses {
+		got[status.Name] = status.Status
+	}
+	want := map[string]string{
+		"local":   core.SourceStatusLocal,
+		"fresh":   core.SourceStatusFresh,
+		"stale":   core.SourceStatusStale,
+		"missing": core.SourceStatusMissing,
+	}
+	for name, status := range want {
+		if got[name] != status {
+			t.Fatalf("expected %s status %s, got statuses %#v", name, status, statuses)
+		}
+	}
+}
+
+func TestCoreListSkillsUsesStaleCacheWithoutSync(t *testing.T) {
+	tmp := t.TempDir()
+	repo := filepath.Join(tmp, "repo")
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	writeCoreRepo(t, repo)
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config: %v", err)
+	}
+	sources := core.SourcesHeader + "\n" +
+		"cached\tgit\t" + filepath.Join(tmp, "missing-remote") + "\tmain\tcatalog/skills.tsv\n"
+	if err := os.WriteFile(filepath.Join(configDir, "sources.tsv"), []byte(sources), 0o644); err != nil {
+		t.Fatalf("write sources: %v", err)
+	}
+	writeCoreCatalog(t, filepath.Join(cacheDir, "sources", "cached"), "stale-rules")
+	writeCoreSourceSyncedAt(t, cacheDir, "cached", time.Date(2026, 5, 14, 9, 0, 0, 0, time.UTC))
+	backend := coreBackend(t, repo, tmp, configDir, cacheDir, nil)
+
+	skills, warning, err := backend.ListSkills("")
+	if err != nil {
+		t.Fatalf("list skills should use stale cache: %v", err)
+	}
+	if len(skills) != 1 || skills[0].Name != "stale-rules" {
+		t.Fatalf("expected stale cached skill, got %#v", skills)
+	}
+	if !strings.Contains(warning, "Warning: using stale cache for source cached") {
+		t.Fatalf("expected stale cache warning, got %q", warning)
+	}
+}
+
+func TestCoreListSkillsPartialSourceFailureReturnsSkillsAndWarning(t *testing.T) {
+	tmp := t.TempDir()
+	repo := filepath.Join(tmp, "repo")
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	localSource := filepath.Join(tmp, "local-source")
+	writeCoreRepo(t, repo)
+	writeCoreCatalog(t, localSource, "local-rules")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config: %v", err)
+	}
+	sources := core.SourcesHeader + "\n" +
+		"local\tpath\t" + localSource + "\t-\tcatalog/skills.tsv\n" +
+		"missing\tgit\t" + filepath.Join(tmp, "missing-remote") + "\tmain\tcatalog/skills.tsv\n"
+	if err := os.WriteFile(filepath.Join(configDir, "sources.tsv"), []byte(sources), 0o644); err != nil {
+		t.Fatalf("write sources: %v", err)
+	}
+	backend := coreBackend(t, repo, tmp, configDir, cacheDir, nil)
+
+	skills, warning, err := backend.ListSkills("")
+	if err != nil {
+		t.Fatalf("partial source failure should not fail: %v", err)
+	}
+	if len(skills) != 1 || skills[0].Name != "local-rules" {
+		t.Fatalf("expected available local skill, got %#v", skills)
+	}
+	if !strings.Contains(warning, "source missing unavailable") ||
+		!strings.Contains(warning, "Run: skillhub sources sync missing") {
+		t.Fatalf("expected missing source warning, got %q", warning)
+	}
+}
+
+func TestCoreListSkillsAllMissingCachesReturnsActionableError(t *testing.T) {
+	tmp := t.TempDir()
+	repo := filepath.Join(tmp, "repo")
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	writeCoreRepo(t, repo)
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config: %v", err)
+	}
+	sources := core.SourcesHeader + "\n" +
+		"missing\tgit\t" + filepath.Join(tmp, "missing-remote") + "\tmain\tcatalog/skills.tsv\n"
+	if err := os.WriteFile(filepath.Join(configDir, "sources.tsv"), []byte(sources), 0o644); err != nil {
+		t.Fatalf("write sources: %v", err)
+	}
+	backend := coreBackend(t, repo, tmp, configDir, cacheDir, nil)
+
+	_, warning, err := backend.ListSkills("")
+	if err == nil {
+		t.Fatalf("expected missing cache error")
+	}
+	if !strings.Contains(err.Error(), "Run: skillhub sources sync missing") {
+		t.Fatalf("expected actionable sync error, got %v", err)
+	}
+	if !strings.Contains(warning, "source missing unavailable") {
+		t.Fatalf("expected warning for missing source, got %q", warning)
+	}
+}
+
 func TestCoreProjectInstallWritesLockfileAndRestoreUsesLockSource(t *testing.T) {
 	tmp := t.TempDir()
 	repo := filepath.Join(tmp, "repo")
@@ -205,7 +357,6 @@ func TestCoreProjectInstallWritesLockfileAndRestoreUsesLockSource(t *testing.T) 
 	sourceDir := filepath.Join(tmp, "source")
 	projectDir := filepath.Join(tmp, core.ScopeProject)
 	writeCoreRepo(t, repo)
-	const ruleSelector = "rules-selector"
 	writeCoreCatalog(t, sourceDir, ruleSelector)
 	writeCoreSources(t, configDir, sourceDir)
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {
@@ -213,7 +364,7 @@ func TestCoreProjectInstallWritesLockfileAndRestoreUsesLockSource(t *testing.T) 
 	}
 	backend := coreBackend(t, repo, projectDir, configDir, cacheDir, nil)
 
-	if _, err := backend.Install(core.InstallOptions{
+	if _, _, err := backend.Install(core.InstallOptions{
 		Names:   []string{ruleSelector},
 		Target:  core.TargetCodex,
 		Scope:   core.ScopeProject,
@@ -267,14 +418,14 @@ func TestCoreProjectInstallPartialSuccessWritesLockfile(t *testing.T) {
 	}
 	backend := coreBackend(t, repo, projectDir, configDir, cacheDir, nil)
 
-	output, err := backend.Install(core.InstallOptions{
+	output, warning, err := backend.Install(core.InstallOptions{
 		Names:   []string{"go-project-rules", "missing-skill"},
 		Target:  core.TargetCodex,
 		Scope:   core.ScopeProject,
 		Project: projectDir,
 	})
 	if err == nil || !strings.Contains(err.Error(), "unknown skill: missing-skill") {
-		t.Fatalf("expected missing skill error, got output=%q err=%v", output, err)
+		t.Fatalf("expected missing skill error, got output=%q warning=%q err=%v", output, warning, err)
 	}
 	installedPath := filepath.Join(projectDir, ".agents", "skills", "go-project-rules")
 	if _, err := os.Stat(filepath.Join(installedPath, "SKILL.md")); err != nil {
@@ -311,8 +462,8 @@ func TestCoreRestoreFailureReturnsErrorAndPreservesLockfile(t *testing.T) {
 		t.Fatalf("mkdir project: %v", err)
 	}
 	backend := coreBackend(t, repo, projectDir, configDir, cacheDir, nil)
-	if _, err := backend.Install(core.InstallOptions{
-		Names:   []string{"rules-selector"},
+	if _, _, err := backend.Install(core.InstallOptions{
+		Names:   []string{ruleSelector},
 		Target:  core.TargetCodex,
 		Scope:   core.ScopeProject,
 		Project: projectDir,
@@ -447,7 +598,7 @@ func TestCoreUpdateReportsProjectLockfileWriteFailure(t *testing.T) {
 		t.Fatalf("mkdir project: %v", err)
 	}
 	backend := coreBackend(t, repo, projectDir, configDir, cacheDir, nil)
-	if _, err := backend.Install(core.InstallOptions{
+	if _, _, err := backend.Install(core.InstallOptions{
 		Names:   []string{"rules-selector"},
 		Target:  core.TargetCodex,
 		Scope:   core.ScopeProject,
@@ -493,7 +644,7 @@ func TestCoreTargetsDetectCountsRegistryManagedProjectSkill(t *testing.T) {
 		t.Fatalf("mkdir project: %v", err)
 	}
 	backend := coreBackend(t, repo, projectDir, configDir, cacheDir, nil)
-	if _, err := backend.Install(core.InstallOptions{
+	if _, _, err := backend.Install(core.InstallOptions{
 		Names:   []string{"rules-selector"},
 		Target:  core.TargetCodex,
 		Scope:   core.ScopeProject,
@@ -591,9 +742,12 @@ func TestCoreRecommendRanksProjectSignals(t *testing.T) {
 		t.Fatalf("write go.mod: %v", err)
 	}
 	backend := coreBackend(t, repo, projectDir, configDir, cacheDir, nil)
-	rows, err := backend.Recommend(core.RecommendOptions{Project: projectDir})
+	rows, warning, err := backend.Recommend(core.RecommendOptions{Project: projectDir})
 	if err != nil {
 		t.Fatalf("recommend: %v", err)
+	}
+	if warning != "" {
+		t.Fatalf("expected no recommendation warning, got %q", warning)
 	}
 	if len(rows) == 0 || rows[0].Skill != "go-project-rules" || !strings.Contains(rows[0].Reason, "go.mod") {
 		t.Fatalf("expected go recommendation first, got %#v", rows)

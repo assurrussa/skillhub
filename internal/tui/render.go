@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/assurrussa/skillhub/internal/core"
 )
 
 func (m model) View() string {
@@ -60,7 +62,7 @@ func (m model) renderHeader(_ int) string {
 
 	title := titleStyle.Render("Skillhub")
 	summary := fmt.Sprintf(
-		"Sources: %d   Skills: %d   Visible: %d   Selected: %d   Search: %s",
+		"Sources: %d   Skills: %d   Visible: %d   Queued: %d   Search: %s",
 		m.sourceCount(),
 		len(m.skills),
 		len(m.filtered),
@@ -108,6 +110,13 @@ func (m model) renderNavigation(width int) string {
 }
 
 func (m model) renderBody(width int) string {
+	if m.sourceProgress.Total > 0 && (m.busy || m.sourceProgress.Failed) {
+		title := "Source update progress"
+		if m.sourceProgress.Failed {
+			title = "Source update failed"
+		}
+		return m.renderPanel(title, m.sourceSyncProgressContent(width-6), width)
+	}
 	if m.install.progress.Total > 0 && (m.busy || m.install.progress.Failed) {
 		title := "Install progress"
 		if m.install.progress.Failed {
@@ -274,7 +283,7 @@ func (m model) skillListCardTitle(opts skillListCardOptions) string {
 	}
 	checkbox := checkboxStyle.Render("[ ]")
 	if m.selected[skill.Key()] {
-		checkbox = checkedStyle.Render("[✓]")
+		checkbox = checkedStyle.Render("[+]")
 	}
 	title := fmt.Sprintf("%s %s %s %s", cursor, treeStyle.Render("  "+branch), checkbox, skill.Name)
 	locations := m.installedLocationsForSkill(skill)
@@ -302,7 +311,7 @@ func (m model) detailsContent(width int) string {
 		labelLine("Source", skill.Source),
 		labelLine("Category", badgeStyle.Render(skill.Category)),
 		labelLine("Triggers", skill.Triggers),
-		labelLine("Selected", selected),
+		labelLine("Install queue", selected),
 		labelLine("Default path", filepath.Join(m.installTargetPath(), skill.Name)),
 		labelLine("Installed", installedLocationsBadge(m.installedLocationsForSkill(skill))),
 		"",
@@ -325,6 +334,9 @@ func (m model) installedLocationsForSkill(skill Skill) []InstalledSkill {
 			continue
 		}
 		if row.Source+"/"+row.Skill != key && row.QualifiedSkill != key {
+			continue
+		}
+		if row.PathMissing {
 			continue
 		}
 		rows = append(rows, row)
@@ -434,7 +446,7 @@ func (m model) targetsContent(width int) string {
 
 func (m model) installedContent(width int) string {
 	legend := helpStyle.Render(
-		"[M] managed by Skillhub: update/uninstall   [ ] unmanaged: read-only in TUI   registry: recorded usage",
+		"[M] managed by Skillhub   [ ] unmanaged: read-only in TUI   enter: locations",
 	)
 	if len(m.installedRows) == 0 {
 		return legend + "\n\nNo installed skills found.\n\nInstall skills from 2 Skills, or run skillhub installed list in CLI."
@@ -453,29 +465,13 @@ func (m model) installedContent(width int) string {
 	_, _ = fmt.Fprintln(&b)
 	_, _ = fmt.Fprintln(&b, legend)
 	_, _ = fmt.Fprintln(&b)
+	summaries := m.installedSummaries()
 	visible := m.installedVisibleCount()
 	end := m.installedOffset + visible
-	if end > len(m.installedRows) {
-		end = len(m.installedRows)
+	if end > len(summaries) {
+		end = len(summaries)
 	}
-	previousSection := ""
-	previousSubgroup := ""
-	for row, installed := range m.installedRows[m.installedOffset:end] {
-		section := installedSection(installed)
-		subgroup := installedSubgroup(installed)
-		if section != previousSection {
-			if row != 0 {
-				_, _ = fmt.Fprintln(&b)
-			}
-			_, _ = fmt.Fprintln(&b, categoryStyle.Render(section))
-			previousSection = section
-			previousSubgroup = ""
-		}
-		if subgroup != "" && subgroup != previousSubgroup {
-			_, _ = fmt.Fprintln(&b, treeStyle.Render("  "+subgroup))
-			previousSubgroup = subgroup
-		}
-
+	for row, summary := range summaries[m.installedOffset:end] {
 		i := m.installedOffset + row
 		cursor := " "
 		if i == m.installedCursor {
@@ -483,40 +479,46 @@ func (m model) installedContent(width int) string {
 		}
 		marker := checkboxStyle.Render("[ ]")
 		managedLabel := "unmanaged"
-		if installed.Managed == managedYes {
+		if summary.ManagedCount > 0 {
 			marker = checkedStyle.Render("[M]")
 			managedLabel = "managed"
 		}
-		indent := "  "
-		if subgroup != "" {
-			indent = "    "
+		locationLabel := "location"
+		if len(summary.Rows) != 1 {
+			locationLabel = "locations"
 		}
 		title := fmt.Sprintf(
-			"%s%s %s %s    %s",
-			indent,
+			"%s %s %s    %d %s",
 			cursor,
 			marker,
-			installed.Skill,
-			targetScopeLabel(installed.Target, installed.Scope),
+			summary.Key,
+			len(summary.Rows),
+			locationLabel,
 		)
 		if i == m.installedCursor {
 			title = activeRowStyle.Render(title)
 		}
-		if installed.Managed == managedYes {
+		if summary.ManagedCount > 0 {
 			title = selectedRowStyle.Render(title)
 		}
 		metaParts := []string{managedLabel}
-		if installed.RegistryOnly {
-			metaParts = append(metaParts, "registry")
+		if summary.ManagedCount > 0 {
+			metaParts = append(metaParts, fmt.Sprintf("managed: %d", summary.ManagedCount))
 		}
-		if strings.TrimSpace(installed.ProjectPath) != "" && installed.ProjectPath != "-" {
-			metaParts = append(metaParts, "project: "+truncate(installed.ProjectPath, max(12, width-30)))
+		if summary.RegistryCount > 0 {
+			metaParts = append(metaParts, fmt.Sprintf("registry: %d", summary.RegistryCount))
 		}
-		meta := fmt.Sprintf("%ssource: %s   %s", indent, emptyLabel(installed.Source, "-"), strings.Join(metaParts, "   "))
-		path := indent + truncate(installed.Path, max(12, width-len(indent)))
+		if summary.ProjectCount > 0 {
+			metaParts = append(metaParts, fmt.Sprintf("projects: %d", summary.ProjectCount))
+		}
+		if summary.MissingCount > 0 {
+			metaParts = append(metaParts, fmt.Sprintf("missing: %d", summary.MissingCount))
+		}
+		source := emptyLabel(summary.Row.Source, "-")
+		targets := truncate(strings.Join(summary.TargetLabels, ", "), max(12, width-17))
 		_, _ = fmt.Fprintln(&b, title)
-		_, _ = fmt.Fprintln(&b, subtleStyle.Render(meta))
-		_, _ = fmt.Fprintln(&b, subtleStyle.Render(path))
+		_, _ = fmt.Fprintln(&b, subtleStyle.Render("    source: "+source+"   "+strings.Join(metaParts, "   ")))
+		_, _ = fmt.Fprintln(&b, subtleStyle.Render("    targets: "+targets))
 		if row != end-m.installedOffset-1 {
 			_, _ = fmt.Fprintln(&b)
 		}
@@ -530,71 +532,107 @@ func (m model) installedDetailsContent(width int) string {
 		return "No installed locations found."
 	}
 
-	if m.installedDetailCursor >= len(rows) {
-		m.installedDetailCursor = len(rows) - 1
-	}
-	if m.installedDetailCursor < 0 {
-		m.installedDetailCursor = 0
-	}
-
 	var b strings.Builder
-	_, _ = fmt.Fprintln(&b, titleStyle.Render(installedSkillLabel(rows[0])))
-	_, _ = fmt.Fprintln(&b)
-	_, _ = fmt.Fprintf(&b, "%s\n\n", badgeStyle.Render(fmt.Sprintf("Installed in: %d", len(rows))))
+	_, _ = b.WriteString(installedDetailsHeader(rows))
 
-	visible := m.installedDetailVisibleCount()
-	end := m.installedDetailOffset + visible
-	if end > len(rows) {
-		end = len(rows)
-	}
-	for rowIndex, row := range rows[m.installedDetailOffset:end] {
-		i := m.installedDetailOffset + rowIndex
-		cursor := " "
-		if i == m.installedDetailCursor {
-			cursor = uiSelectedCursor
-		}
-		marker := checkboxStyle.Render("[ ]")
-		if row.Managed == managedYes {
-			marker = checkedStyle.Render("[M]")
-		}
-		title := fmt.Sprintf("%s %s %s", cursor, marker, targetScopeLabel(row.Target, row.Scope))
-		if row.Scope == scopeProject && strings.TrimSpace(row.ProjectPath) != "" && row.ProjectPath != "-" {
-			title = fmt.Sprintf(
-				"%s %s %s %s",
-				cursor,
-				marker,
-				projectBadgeStyle.Render("LOCAL PROJECT"),
-				targetScopeLabel(row.Target, row.Scope),
-			)
-		}
-		if i == m.installedDetailCursor {
-			title = activeRowStyle.Render(title)
-		}
-		if row.Managed == managedYes {
-			title = selectedRowStyle.Render(title)
-		}
-		_, _ = fmt.Fprintln(&b, title)
-		if strings.TrimSpace(row.ProjectPath) != "" && row.ProjectPath != "-" {
-			_, _ = fmt.Fprintln(&b, "    "+projectBadgeStyle.Render("Project root: "+truncate(row.ProjectPath, max(12, width-18))))
-		}
-		_, _ = fmt.Fprintln(&b, subtleStyle.Render("    path: "+truncate(row.Path, max(12, width-10))))
-		metaParts := []string{"source: " + emptyLabel(row.Source, "-")}
-		if strings.TrimSpace(row.ContentHash) != "" && row.ContentHash != "-" {
-			metaParts = append(metaParts, "hash: "+row.ContentHash)
-		}
-		if strings.TrimSpace(row.InstalledAt) != "" && row.InstalledAt != "-" {
-			metaParts = append(metaParts, "installed: "+row.InstalledAt)
-		}
-		if strings.TrimSpace(row.UpdatedAt) != "" && row.UpdatedAt != "-" {
-			metaParts = append(metaParts, "updated: "+row.UpdatedAt)
-		}
-		meta := indent(wrapText(strings.Join(metaParts, "   "), max(12, width-4)), "    ")
-		_, _ = fmt.Fprintln(&b, subtleStyle.Render(meta))
-		if rowIndex != end-m.installedDetailOffset-1 {
+	cursor := clampInstalledDetailCursor(m.installedDetailCursor, len(rows))
+	start, end := m.installedDetailWindow(len(rows))
+	for rowIndex, row := range rows[start:end] {
+		i := start + rowIndex
+		_, _ = b.WriteString(m.installedDetailRowContent(row, i, cursor, width))
+		if rowIndex != end-start-1 {
 			_, _ = fmt.Fprintln(&b)
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func installedDetailsHeader(rows []InstalledSkill) string {
+	var b strings.Builder
+	_, _ = fmt.Fprintln(&b, titleStyle.Render(installedSkillLabel(rows[0])))
+	_, _ = fmt.Fprintln(&b)
+	_, _ = fmt.Fprintf(&b, "%s\n\n", badgeStyle.Render(fmt.Sprintf("Installed in: %d", len(rows))))
+	return b.String()
+}
+
+func clampInstalledDetailCursor(cursor, rowCount int) int {
+	if cursor >= rowCount {
+		return rowCount - 1
+	}
+	if cursor < 0 {
+		return 0
+	}
+	return cursor
+}
+
+func (m model) installedDetailWindow(rowCount int) (start, end int) {
+	start = m.installedDetailOffset
+	if start > rowCount {
+		start = rowCount
+	}
+	end = start + m.installedDetailVisibleCount()
+	if end > rowCount {
+		end = rowCount
+	}
+	return start, end
+}
+
+func (m model) installedDetailRowContent(row InstalledSkill, index, cursorIndex, width int) string {
+	var b strings.Builder
+	_, _ = fmt.Fprintln(&b, m.installedDetailRowTitle(row, index, cursorIndex))
+	if strings.TrimSpace(row.ProjectPath) != "" && row.ProjectPath != "-" {
+		project := "Project root: " + truncate(row.ProjectPath, max(12, width-18))
+		_, _ = fmt.Fprintln(&b, "    "+projectBadgeStyle.Render(project))
+	}
+	_, _ = fmt.Fprintln(&b, subtleStyle.Render("    path: "+truncate(row.Path, max(12, width-10))))
+	meta := indent(wrapText(strings.Join(installedDetailMetaParts(row), "   "), max(12, width-4)), "    ")
+	_, _ = fmt.Fprint(&b, subtleStyle.Render(meta))
+	return b.String()
+}
+
+func (m model) installedDetailRowTitle(row InstalledSkill, index, cursorIndex int) string {
+	cursor := " "
+	if index == cursorIndex {
+		cursor = uiSelectedCursor
+	}
+	marker := checkboxStyle.Render("[ ]")
+	if row.Managed == managedYes {
+		marker = checkedStyle.Render("[M]")
+	}
+	title := fmt.Sprintf("%s %s %s", cursor, marker, targetScopeLabel(row.Target, row.Scope))
+	if strings.TrimSpace(row.ProjectPath) != "" && row.ProjectPath != "-" {
+		title = fmt.Sprintf(
+			"%s %s %s %s",
+			cursor,
+			marker,
+			projectBadgeStyle.Render("LOCAL PROJECT"),
+			targetScopeLabel(row.Target, row.Scope),
+		)
+	}
+	if index == cursorIndex {
+		title = activeRowStyle.Render(title)
+	}
+	if row.Managed == managedYes {
+		title = selectedRowStyle.Render(title)
+	}
+	return title
+}
+
+func installedDetailMetaParts(row InstalledSkill) []string {
+	metaParts := []string{"source: " + emptyLabel(row.Source, "-")}
+	if strings.TrimSpace(row.ContentHash) != "" && row.ContentHash != "-" {
+		metaParts = append(metaParts, "hash: "+row.ContentHash)
+	}
+	if strings.TrimSpace(row.InstalledAt) != "" && row.InstalledAt != "-" {
+		metaParts = append(metaParts, "installed: "+row.InstalledAt)
+	}
+	if strings.TrimSpace(row.UpdatedAt) != "" && row.UpdatedAt != "-" {
+		metaParts = append(metaParts, "updated: "+row.UpdatedAt)
+	}
+	if row.PathMissing {
+		metaParts = append(metaParts, core.ResultMissing)
+	}
+	return metaParts
 }
 
 func (m model) usageContent(_ int) string {
@@ -720,6 +758,9 @@ func (m model) usageDetailsContent(width int) string {
 		if strings.TrimSpace(row.UpdatedAt) != "" && row.UpdatedAt != "-" {
 			metaParts = append(metaParts, "updated: "+row.UpdatedAt)
 		}
+		if row.PathMissing {
+			metaParts = append(metaParts, core.ResultMissing)
+		}
 		meta := indent(wrapText(strings.Join(metaParts, "   "), max(12, width-4)), "    ")
 		_, _ = fmt.Fprintln(&b, subtleStyle.Render(meta))
 		if rowIndex != end-m.usageDetailOffset-1 {
@@ -755,14 +796,14 @@ func (m model) installProgressContent(width int) string {
 	_, _ = fmt.Fprintln(&b)
 	_, _ = fmt.Fprintln(&b, "Queue")
 	for i, queueItem := range m.install.progress.Items {
-		state := "pending"
+		state := queueStatePending
 		switch {
 		case i < m.install.progress.Completed:
-			state = "done"
+			state = queueStateDone
 		case i == m.install.progress.Current-1 && m.install.progress.Failed:
-			state = "failed"
+			state = queueStateFailed
 		case i == m.install.progress.Current-1:
-			state = "running " + m.spinnerView()
+			state = queueStateRunning + " " + m.spinnerView()
 		}
 		line := fmt.Sprintf("  %2d. %-10s %s -> %s", i+1, state, queueItem.Skill, queueItem.Choice.Label)
 		if i == m.install.progress.Current-1 {
@@ -779,6 +820,56 @@ func (m model) installProgressContent(width int) string {
 		_, _ = fmt.Fprintln(&b)
 		_, _ = fmt.Fprintln(&b, "Error")
 		_, _ = fmt.Fprintln(&b, indent(wrapText(m.install.progress.Error, max(12, width-2)), "  "))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m model) sourceSyncProgressContent(width int) string {
+	item, ok := m.sourceProgress.currentItem()
+	if !ok {
+		return "No source update step is running."
+	}
+
+	title := fmt.Sprintf("Updating %d/%d", m.sourceProgress.Current, m.sourceProgress.Total)
+
+	var b strings.Builder
+	_, _ = fmt.Fprintln(&b, titleStyle.Render(title))
+	_, _ = fmt.Fprintln(&b)
+	if m.sourceProgress.Failed {
+		_, _ = fmt.Fprintln(&b, "Stopped")
+	} else {
+		_, _ = fmt.Fprintf(&b, "Running %s\n", m.spinnerView())
+	}
+	_, _ = fmt.Fprintf(&b, "Source %s\n", item.Name)
+	_, _ = fmt.Fprintln(&b)
+	_, _ = fmt.Fprintln(&b, installProgressBar(m.sourceProgress.Completed, m.sourceProgress.Total, max(12, width-8)))
+	_, _ = fmt.Fprintln(&b)
+	_, _ = fmt.Fprintln(&b, "Queue")
+	for i, queueItem := range m.sourceProgress.Items {
+		state := queueStatePending
+		switch {
+		case i < m.sourceProgress.Completed:
+			state = queueStateDone
+		case i == m.sourceProgress.Current-1 && m.sourceProgress.Failed:
+			state = queueStateFailed
+		case i == m.sourceProgress.Current-1:
+			state = queueStateRunning + " " + m.spinnerView()
+		}
+		line := fmt.Sprintf("  %2d. %-10s %s", i+1, state, queueItem.Name)
+		if i == m.sourceProgress.Current-1 {
+			line = activeRowStyle.Render(line)
+		}
+		_, _ = fmt.Fprintln(&b, truncate(line, max(12, width)))
+	}
+	if strings.TrimSpace(m.sourceProgress.LastLine) != "" {
+		_, _ = fmt.Fprintln(&b)
+		_, _ = fmt.Fprintln(&b, "Last result")
+		_, _ = fmt.Fprintln(&b, indent(wrapText(m.sourceProgress.LastLine, max(12, width-2)), "  "))
+	}
+	if strings.TrimSpace(m.sourceProgress.Error) != "" {
+		_, _ = fmt.Fprintln(&b)
+		_, _ = fmt.Fprintln(&b, "Error")
+		_, _ = fmt.Fprintln(&b, indent(wrapText(m.sourceProgress.Error, max(12, width-2)), "  "))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -830,21 +921,77 @@ func (m model) sourcesContent(width int) string {
 		return "No sources configured.\n\nPress d for recommended presets or n for a custom source."
 	}
 	var b strings.Builder
-	for i, source := range m.sources {
-		if i > 0 {
+	counts := sourceStatusCounts(m.sources)
+	_, _ = fmt.Fprintf(
+		&b,
+		"Sources: %d   local: %d   fresh: %d   stale: %d   missing: %d   error: %d\n",
+		len(m.sources),
+		counts[core.SourceStatusLocal],
+		counts[core.SourceStatusFresh],
+		counts[core.SourceStatusStale],
+		counts[core.SourceStatusMissing],
+		counts[core.SourceStatusError],
+	)
+	_, _ = fmt.Fprintln(&b)
+	visible := m.sourceVisibleCount()
+	end := m.sourceOffset + visible
+	if end > len(m.sources) {
+		end = len(m.sources)
+	}
+	for row, source := range m.sources[m.sourceOffset:end] {
+		i := m.sourceOffset + row
+		if row > 0 {
 			_, _ = fmt.Fprintln(&b)
 		}
-		_, _ = fmt.Fprintln(&b, titleStyle.Render(source.Name))
-		_, _ = fmt.Fprintln(&b, subtleStyle.Render(fmt.Sprintf("    %s %s   catalog: %s", source.Type, source.Ref, source.Catalog)))
-		_, _ = fmt.Fprintln(&b, "    "+truncate(source.Location, max(16, width-4)))
+		name := source.Name
+		if source.Status != "" {
+			name += " [" + source.Status + "]"
+		}
+		nameLine := titleStyle.Render(name)
+		if i == m.sourceCursor {
+			nameLine = activeRowStyle.Width(width).Render(name)
+		}
+		_, _ = fmt.Fprintln(&b, nameLine)
+		lastSync := emptyLabel(source.LastSyncedAt, "-")
+		_, _ = fmt.Fprintln(&b, subtleStyle.Render(fmt.Sprintf(
+			"    %s %s   last sync: %s   catalog: %s",
+			source.Type,
+			source.Ref,
+			lastSync,
+			source.Catalog,
+		)))
+		_, _ = fmt.Fprintln(&b, "    location: "+truncate(source.Location, max(16, width-14)))
+		if strings.TrimSpace(source.CachePath) != "" {
+			_, _ = fmt.Fprintln(&b, "    cache: "+truncate(source.CachePath, max(16, width-11)))
+		}
+		if strings.TrimSpace(source.Message) != "" {
+			_, _ = fmt.Fprintln(&b, indent(wrapText(source.Message, max(16, width-4)), "    "))
+		}
 	}
 	_, _ = fmt.Fprintln(&b)
-	_, _ = fmt.Fprintln(&b, helpStyle.Render("d presets  n custom source  s sync  r reload"))
+	_, _ = fmt.Fprintln(&b, helpStyle.Render("j/k move  u update source  U/s update all  d presets  n custom  r reload"))
 	return strings.TrimRight(b.String(), "\n")
 }
 
+func sourceStatusCounts(sources []SourcePreset) map[string]int {
+	counts := map[string]int{
+		core.SourceStatusLocal:   0,
+		core.SourceStatusFresh:   0,
+		core.SourceStatusStale:   0,
+		core.SourceStatusMissing: 0,
+		core.SourceStatusError:   0,
+	}
+	for _, source := range sources {
+		status := strings.TrimSpace(source.Status)
+		if _, ok := counts[status]; ok {
+			counts[status]++
+		}
+	}
+	return counts
+}
+
 func (m model) updateContent(width int) string {
-	lockPresence := "missing"
+	lockPresence := core.ResultMissing
 	if m.lockStatus.Present {
 		lockPresence = "present"
 	}
@@ -898,7 +1045,10 @@ func (m model) confirmDeleteContent(width int) string {
 		labelLine("Target", targetScopeLabel(row.Target, row.Scope)),
 		labelLine("Path", row.Path),
 		"",
-		wrapText("This removes only the selected managed skill directory. Unmanaged skills remain CLI-only.", width),
+		wrapText(
+			"This removes the selected managed skill directory, or only its stale registry entry when "+
+				"the directory is missing. Unmanaged skills remain CLI-only.", width,
+		),
 		"",
 		checkedStyle.Render("enter/y confirm") + "  " + helpStyle.Render("esc/n cancel"),
 	}
@@ -927,7 +1077,7 @@ func (m model) installScopeContent(width int) string {
 		},
 	}
 	var b strings.Builder
-	_, _ = fmt.Fprintf(&b, "%s\n\n", labelLine("Selected skills", strconv.Itoa(len(m.selectedNames()))))
+	_, _ = fmt.Fprintf(&b, "%s\n\n", labelLine("Install queue", strconv.Itoa(len(m.selectedNames()))))
 	for i, choice := range choices {
 		cursor := " "
 		if i == m.install.scopeCursor {
@@ -1000,10 +1150,10 @@ func (m model) helpContent(_ int) string {
 		"space       select or toggle where applicable",
 		"enter       open or confirm",
 		"/           search skills or filter usage rows",
-		"u           update highlighted install or usage entry",
-		"U           update all visible recorded project installs in Usage",
+		"u           update highlighted install, usage, or source entry",
+		"U           update visible Usage rows or all Sources",
 		"x           uninstall highlighted managed skill",
-		"s           sync sources",
+		"s           update all Sources",
 		"r           reload current section or restore lockfile in Update",
 		"esc         back",
 		"q           quit",
@@ -1062,6 +1212,9 @@ func (m model) defaultsContent(width int) string {
 }
 
 func (m model) helpText() string {
+	if m.sourceProgress.Failed {
+		return "enter/esc back to sources  q quit"
+	}
 	if m.install.progress.Failed {
 		return "enter/esc back to targets  q quit"
 	}
@@ -1084,7 +1237,7 @@ func (m model) helpText() string {
 		return "enter/y install  esc back  q quit"
 	}
 	if m.viewMode == viewDetails {
-		return "space select  i targets  enter/esc back  q quit"
+		return "space queue  i targets  enter/esc back  q quit"
 	}
 	if m.viewMode == viewInstalledDetails {
 		return "j/k move location  u update  x uninstall  esc back  q quit"
@@ -1099,13 +1252,13 @@ func (m model) helpText() string {
 		return "enter/y confirm  esc/n cancel  q quit"
 	}
 	if m.viewMode == viewInstalled {
-		return "1-6/left-right sections  j/k move  enter details  u update target  x uninstall managed  r reload  ? help  q quit"
+		return "1-6/left-right sections  j/k move  enter locations  u update single  x uninstall single  r reload  ? help  q quit"
 	}
 	if m.viewMode == viewUsage {
 		return "1-6/left-right sections  j/k move  / filter  enter details  u update skill  U update visible  r reload  ? help  q quit"
 	}
 	if m.viewMode == viewSources {
-		return "1-6/left-right sections  d presets  n custom  s sync  r reload  ? help  q quit"
+		return "1-6/left-right sections  j/k move  u update source  U/s update all  d presets  n custom  r reload  ? help  q quit"
 	}
 	if m.viewMode == viewUpdate {
 		return "1-6/left-right sections  r restore project lockfile  u installed screen  ? help  q quit"
@@ -1119,7 +1272,7 @@ func (m model) helpText() string {
 	return strings.Join([]string{
 		"1-6/left-right sections",
 		"j/k move",
-		"space select",
+		"space queue",
 		"enter details",
 		"/ search",
 		"a all",

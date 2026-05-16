@@ -57,6 +57,18 @@ required at runtime, and user-added sources live outside the checkout.
 - Use Context7 for current Cobra, Bubble Tea, Lip Gloss, or other library docs
   when changing APIs or library-specific behavior.
 
+## Project Initialization
+
+- Treat this repository as initialized when `AGENTS.md` exists, relevant
+  project-scope skills are installed under `.agents/skills`, and
+  `skills.lock.toml` records those project installs.
+- To initialize or refresh recommendations, run `skillhub recommend --project .`
+  first and install only relevant project skills. Do not blindly install low
+  confidence recommendations from unrelated sources.
+- Project-scope installs are allowed to update `.agents/skills`,
+  `skills.lock.toml`, and Skillhub-managed registry rows. They must not depend
+  on `.skillhub.json` sidecars inside the project.
+
 ## Common Checks
 
 Prefer Makefile targets for local work:

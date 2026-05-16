@@ -354,10 +354,38 @@ func (b *Backend) installOneSkill(opts installOneOptions) error {
 		return err
 	}
 	installedPath := filepath.Join(opts.Root, match.skill)
+	if err := b.ensureInstallCanReplace(installedPath, opts.MetadataScope); err != nil {
+		return err
+	}
 	if err := copyDir(sourceSkillDir, installedPath); err != nil {
 		return err
 	}
 	return b.recordInstalledSkill(match, opts, installedPath)
+}
+
+func (b *Backend) ensureInstallCanReplace(installedPath, metadataScope string) error {
+	info, err := os.Stat(installedPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("refusing to overwrite non-directory install path: %s", installedPath)
+	}
+	if _, registryManaged := b.usageRowByPath(installedPath); registryManaged {
+		return nil
+	}
+	if metadataScope != ScopeProject {
+		if _, sidecarManaged := readMetadata(filepath.Join(installedPath, ".skillhub.json")); sidecarManaged {
+			return nil
+		}
+	}
+	return fmt.Errorf(
+		"refusing to overwrite unmanaged skill: %s\nuninstall it with --force or remove it before installing",
+		installedPath,
+	)
 }
 
 func missingCatalogedSkillError(match catalogMatch, sourceSkillDir string) error {

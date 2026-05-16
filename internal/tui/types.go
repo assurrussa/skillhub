@@ -84,7 +84,6 @@ const (
 	viewSkills           = "skills"
 	viewInstalled        = "installed"
 	viewSources          = "sources"
-	viewUpdate           = "update"
 	viewDefaults         = "defaults"
 	viewAddSource        = "add-source"
 	viewDetails          = "details"

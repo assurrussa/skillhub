@@ -29,7 +29,6 @@ const (
 	ViewSkills           = viewSkills
 	ViewInstalled        = viewInstalled
 	ViewSources          = viewSources
-	ViewUpdate           = viewUpdate
 	ViewDefaults         = viewDefaults
 	ViewAddSource        = viewAddSource
 	ViewDetails          = viewDetails

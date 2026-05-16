@@ -496,6 +496,85 @@ func TestCoreProjectInstallPartialSuccessWritesLockfile(t *testing.T) {
 	}
 }
 
+func TestCoreInstallRefusesUnmanagedDirectorySkill(t *testing.T) {
+	tmp := t.TempDir()
+	repo := filepath.Join(tmp, "repo")
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	sourceDir := filepath.Join(tmp, "source")
+	targetDir := filepath.Join(tmp, "target")
+	writeCoreRepo(t, repo)
+	writeCoreCatalog(t, sourceDir, ruleSelector)
+	writeCoreSources(t, configDir, sourceDir)
+	installedPath := filepath.Join(targetDir, ruleSelector)
+	if err := os.MkdirAll(installedPath, 0o755); err != nil {
+		t.Fatalf("mkdir unmanaged skill: %v", err)
+	}
+	manualContent := []byte("# rules-selector\n\nmanual\n")
+	if err := os.WriteFile(filepath.Join(installedPath, "SKILL.md"), manualContent, 0o644); err != nil {
+		t.Fatalf("write unmanaged skill: %v", err)
+	}
+	backend := coreBackend(t, repo, tmp, configDir, cacheDir, nil)
+
+	_, _, err := backend.Install(core.InstallOptions{
+		Names:  []string{ruleSelector},
+		Target: core.TargetDirectory,
+		Dir:    targetDir,
+	})
+	if err == nil || !strings.Contains(err.Error(), "refusing to overwrite unmanaged skill") {
+		t.Fatalf("expected unmanaged overwrite refusal, got %v", err)
+	}
+	content, readErr := os.ReadFile(filepath.Join(installedPath, "SKILL.md"))
+	if readErr != nil {
+		t.Fatalf("read unmanaged skill: %v", readErr)
+	}
+	if string(content) != string(manualContent) {
+		t.Fatalf("unmanaged skill was overwritten, got:\n%s", content)
+	}
+}
+
+func TestCoreProjectInstallRefusesUnmanagedSkill(t *testing.T) {
+	tmp := t.TempDir()
+	repo := filepath.Join(tmp, "repo")
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	sourceDir := filepath.Join(tmp, "source")
+	projectDir := filepath.Join(tmp, "project")
+	writeCoreRepo(t, repo)
+	writeCoreCatalog(t, sourceDir, ruleSelector)
+	writeCoreSources(t, configDir, sourceDir)
+	installedPath := filepath.Join(projectDir, ".agents", "skills", ruleSelector)
+	if err := os.MkdirAll(installedPath, 0o755); err != nil {
+		t.Fatalf("mkdir unmanaged project skill: %v", err)
+	}
+	manualContent := []byte("# rules-selector\n\nproject manual\n")
+	if err := os.WriteFile(filepath.Join(installedPath, "SKILL.md"), manualContent, 0o644); err != nil {
+		t.Fatalf("write unmanaged project skill: %v", err)
+	}
+	sidecar := []byte(`{"source":"local","skill":"rules-selector"}` + "\n")
+	if err := os.WriteFile(filepath.Join(installedPath, ".skillhub.json"), sidecar, 0o644); err != nil {
+		t.Fatalf("write stale project sidecar: %v", err)
+	}
+	backend := coreBackend(t, repo, projectDir, configDir, cacheDir, nil)
+
+	_, _, err := backend.Install(core.InstallOptions{
+		Names:   []string{ruleSelector},
+		Target:  core.TargetCodex,
+		Scope:   core.ScopeProject,
+		Project: projectDir,
+	})
+	if err == nil || !strings.Contains(err.Error(), "refusing to overwrite unmanaged skill") {
+		t.Fatalf("expected unmanaged project overwrite refusal, got %v", err)
+	}
+	content, readErr := os.ReadFile(filepath.Join(installedPath, "SKILL.md"))
+	if readErr != nil {
+		t.Fatalf("read unmanaged project skill: %v", readErr)
+	}
+	if string(content) != string(manualContent) {
+		t.Fatalf("unmanaged project skill was overwritten, got:\n%s", content)
+	}
+}
+
 func TestCoreRestoreFailureReturnsErrorAndPreservesLockfile(t *testing.T) {
 	tmp := t.TempDir()
 	repo := filepath.Join(tmp, "repo")

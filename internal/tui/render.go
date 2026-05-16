@@ -70,7 +70,7 @@ func (m model) renderHeader(_ int) string {
 		len(m.selected),
 		search,
 	)
-	target := fmt.Sprintf("Target: %s   Change: t", m.installTargetLabel())
+	target := "Default target: " + m.installTargetLabel()
 	switch m.viewMode {
 	case viewTargets:
 		if m.install.targetPurpose == targetPurposeInstall {
@@ -93,8 +93,6 @@ func (m model) renderNavigation(width int) string {
 		{"1", "Installed", viewInstalled},
 		{"2", "Skills", viewSkills},
 		{"3", "Sources", viewSources},
-		{"4", labelTargets, viewTargets},
-		{"5", "Update", viewUpdate},
 	}
 	rendered := make([]string, 0, len(items))
 	current := m.dashboardSection()
@@ -164,9 +162,6 @@ func (m model) renderBody(width int) string {
 	if m.viewMode == viewSources {
 		return m.renderPanel("Sources", m.sourcesSection().content(width-6), width)
 	}
-	if m.viewMode == viewUpdate {
-		return m.renderPanel("Update", m.updateContent(width-6), width)
-	}
 	if m.viewMode == viewDefaults {
 		return m.renderPanel("Source presets", m.sourcesSection().defaultsContent(width-6), width)
 	}
@@ -181,17 +176,59 @@ func (m model) renderBody(width int) string {
 }
 
 func (m model) skillsContent(width int) string {
+	window := clampCursorWindow(m.cursor, m.offset, len(m.filtered), m.visibleCount())
+	start, end := m.skillsRenderWindow(width, window)
+	return m.skillsWindowContent(width, start, end)
+}
+
+func (m model) skillsRenderWindow(width int, window cursorWindow) (start, end int) {
+	start = window.Start
+	end = window.End
+	if len(m.filtered) == 0 {
+		return 0, 0
+	}
+	cursor := window.Cursor
+	if cursor < start {
+		start = cursor
+	}
+	maxEnd := end
+	if cursor >= end {
+		end = cursor + 1
+		maxEnd = end
+	}
+	budget := m.panelBodyBudget()
+	if budget <= 0 {
+		return start, end
+	}
+	for start < cursor && m.skillsWindowHeight(width, start, cursor+1) > budget {
+		start++
+	}
+	if end <= cursor {
+		end = cursor + 1
+	}
+	for end > cursor+1 && m.skillsWindowHeight(width, start, end) > budget {
+		end--
+	}
+	for start < cursor && m.skillsWindowHeight(width, start, cursor+1) > budget {
+		start++
+	}
+	for end < maxEnd && m.skillsWindowHeight(width, start, end+1) <= budget {
+		end++
+	}
+	return start, end
+}
+
+func (m model) skillsWindowHeight(width int, start int, end int) int {
+	return lipgloss.Height(m.skillsWindowContent(width, start, end))
+}
+
+func (m model) skillsWindowContent(width int, start int, end int) string {
 	var b strings.Builder
 
-	visible := m.visibleCount()
-	end := m.offset + visible
-	if end > len(m.filtered) {
-		end = len(m.filtered)
-	}
-	lastInGroup := m.lastVisibleIndexBySourceCategory(m.offset, end)
+	lastInGroup := m.lastVisibleIndexBySourceCategory(start, end)
 	previousSource := ""
 	previousCategory := ""
-	for row, idx := range m.filtered[m.offset:end] {
+	for row, idx := range m.filtered[start:end] {
 		skill := m.skills[idx]
 		previousSource, previousCategory = writeSkillGroupHeaders(
 			&b,
@@ -203,12 +240,12 @@ func (m model) skillsContent(width int) string {
 		card := m.skillListCard(skillListCardOptions{
 			Skill:       skill,
 			Index:       idx,
-			Row:         row,
+			FilteredRow: start + row,
 			Width:       width,
 			LastInGroup: lastInGroup,
 		})
 		_, _ = fmt.Fprintln(&b, card)
-		if row != end-m.offset-1 {
+		if row != end-start-1 {
 			_, _ = fmt.Fprintln(&b)
 		}
 	}
@@ -245,7 +282,7 @@ func writeSkillGroupHeaders(
 type skillListCardOptions struct {
 	Skill       Skill
 	Index       int
-	Row         int
+	FilteredRow int
 	Width       int
 	LastInGroup map[string]int
 }
@@ -268,7 +305,7 @@ func (m model) skillListCard(opts skillListCardOptions) string {
 func (m model) skillListCardTitle(opts skillListCardOptions) string {
 	skill := opts.Skill
 	cursor := " "
-	if m.offset+opts.Row == m.cursor {
+	if opts.FilteredRow == m.cursor {
 		cursor = uiSelectedCursor
 	}
 	branch := "├─"
@@ -284,7 +321,7 @@ func (m model) skillListCardTitle(opts skillListCardOptions) string {
 	if len(locations) > 0 {
 		title += "   " + projectBadgeStyle.Render("installed: "+installedLocationsBadge(locations))
 	}
-	if m.offset+opts.Row == m.cursor {
+	if opts.FilteredRow == m.cursor {
 		return activeRowStyle.Render(title)
 	}
 	return title
@@ -768,7 +805,7 @@ func (m model) installResultContent(_ int) string {
 	_, _ = fmt.Fprintln(&b)
 	actions := strings.Join([]string{
 		badgeStyle.Render("enter back"),
-		badgeStyle.Render("t targets"),
+		badgeStyle.Render("t agents"),
 		badgeStyle.Render("q quit"),
 	}, "  ")
 	_, _ = fmt.Fprintln(&b, actions)
@@ -855,47 +892,23 @@ func sourceStatusCounts(sources []SourcePreset) map[string]int {
 	return counts
 }
 
-func (m model) updateContent(width int) string {
+func (m model) updateHelpLines(width int) []string {
 	lockPresence := core.ResultMissing
 	if m.lockStatus.Present {
 		lockPresence = "present"
 	}
-	lockPath := strings.TrimSpace(m.lockStatus.Path)
-	if lockPath == "" {
-		lockPath = filepath.Join(m.projectDir, "skills.lock.toml")
+	restoreCommand := "skillhub restore --project " + m.projectDir
+	restoreCommand = truncate(restoreCommand, max(12, width-34))
+	return []string{
+		"Update and restore",
+		"skillhub update",
+		"skillhub update --cascade | skillhub update --cascade -v",
+		"skillhub installed update",
+		"skillhub installed usage update --projects",
+		"r restore project lockfile | " + restoreCommand,
+		fmt.Sprintf("Project lockfile: %s rows=%d missing=%d changed=%d skipped=%d",
+			lockPresence, m.lockStatus.Total, m.lockStatus.Missing, m.lockStatus.Changed, m.lockStatus.Skipped),
 	}
-	lines := []string{
-		titleStyle.Render("Project lockfile"),
-		"",
-		labelLine("Lockfile", lockPresence),
-		labelLine("Path", truncate(lockPath, max(12, width-8))),
-		fmt.Sprintf("Rows: %d   Missing: %d   Changed: %d   Unchanged: %d   Skipped: %d",
-			m.lockStatus.Total,
-			m.lockStatus.Missing,
-			m.lockStatus.Changed,
-			m.lockStatus.Unchanged,
-			m.lockStatus.Skipped,
-		),
-		"",
-		helpStyle.Render("r restore project lockfile"),
-		"",
-		titleStyle.Render("Update commands"),
-		"",
-		"Self-update is CLI-only so the TUI does not rewrite the binary while it is running.",
-		"",
-		labelLine("Command", "skillhub update"),
-		labelLine("Cascade", "skillhub update --cascade"),
-		labelLine("Verbose", "skillhub update --cascade -v"),
-		labelLine("Skills", "skillhub installed update"),
-		labelLine("Projects", "skillhub installed usage update --projects"),
-		labelLine("Restore", "skillhub restore --project "+m.projectDir),
-		"",
-		wrapText(
-			"Use 1 Installed to update target folders. Project usage maintenance stays CLI-only.",
-			width,
-		),
-	}
-	return strings.Join(lines, "\n")
 }
 
 func (m model) confirmDeleteContent(width int) string {
@@ -1007,25 +1020,15 @@ func (m model) installConfirmContent(width int) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func (m model) helpContent(_ int) string {
-	lines := []string{
-		"1/2/3/4/5 switch sections",
-		"left/right  switch sections",
-		"j/k         move",
-		"space       select or toggle where applicable",
-		"enter       open or confirm",
-		"/           search skills",
-		"u           update highlighted install or source entry",
-		"U           update all Sources",
-		"x           uninstall highlighted managed skill",
-		"s           update all Sources",
-		"r           reload current section or restore lockfile in Update",
-		"esc         back",
-		"q           quit",
-		"",
-		"[M]         managed by Skillhub; update/uninstall available",
-		"[ ]         unmanaged local skill; read-only in TUI",
-	}
+func (m model) helpContent(width int) string {
+	updateLines := m.updateHelpLines(width)
+	lines := make([]string, 0, len(updateLines)+3)
+	lines = append(lines, updateLines...)
+	lines = append(lines,
+		"1/2/3 or left/right sections  j/k move  enter open",
+		"Skills: / search  space queue  i install  Sources: u/U/s update",
+		"Installed: enter locations  u update  x uninstall  esc/? back  q quit",
+	)
 	return strings.Join(lines, "\n")
 }
 
@@ -1086,7 +1089,7 @@ func (m model) helpText() string {
 		return "enter/esc back to targets  q quit"
 	}
 	if m.viewMode == viewHelp {
-		return "enter/esc back  q quit"
+		return "r restore lockfile  enter/esc/? back  q quit"
 	}
 	if m.viewMode == viewDefaults {
 		return "j/k move  enter add preset  n add custom  esc back  q quit"
@@ -1101,34 +1104,31 @@ func (m model) helpText() string {
 		return "enter/y install  esc back  q quit"
 	}
 	if m.viewMode == viewDetails {
-		return "space queue  i targets  enter/esc back  q quit"
+		return "space queue  i install  enter/esc back  q quit"
 	}
 	if m.viewMode == viewInstalledDetails {
 		return "j/k move location  u update  x uninstall  esc back  q quit"
 	}
 	if m.viewMode == viewInstallResult {
-		return "enter/b back  t targets  q quit"
+		return "enter/b back  t agents  q quit"
 	}
 	if m.viewMode == viewConfirmDelete {
 		return "enter/y confirm  esc/n cancel  q quit"
 	}
 	if m.viewMode == viewInstalled {
-		return "1-5/left-right sections  j/k move  enter locations  u update single  x uninstall single  r reload  ? help  q quit"
+		return "1-3/left-right sections  j/k move  enter locations  u update single  x uninstall single  r reload  ? help  q quit"
 	}
 	if m.viewMode == viewSources {
-		return "1-5/left-right sections  j/k move  u update source  U/s update all  d presets  n custom  r reload  ? help  q quit"
-	}
-	if m.viewMode == viewUpdate {
-		return "1-5/left-right sections  r restore project lockfile  u installed screen  ? help  q quit"
+		return "1-3/left-right sections  j/k move  u update source  U/s update all  d presets  n custom  r reload  ? help  q quit"
 	}
 	if m.viewMode == viewTargets {
 		if m.install.targetPurpose == targetPurposeInstall {
 			return "j/k move  space toggle  enter/i preview  a all  c clear  b scope  r reload  ? help  q quit"
 		}
-		return "1-5/left-right sections  j/k move  r reload  ? help  q quit"
+		return "j/k move  r reload  ? help  q quit"
 	}
 	return strings.Join([]string{
-		"1-5/left-right sections",
+		"1-3/left-right sections",
 		"j/k move",
 		"space queue",
 		"enter details",
@@ -1137,7 +1137,6 @@ func (m model) helpText() string {
 		"c clear",
 		"d presets",
 		"n source",
-		"t targets",
 		"i install",
 		"? help",
 		"q quit",

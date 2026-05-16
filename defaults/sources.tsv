@@ -1,3 +1,3 @@
 name	type	location	ref	catalog
-agent-rules	git	git@github.com:assurrussa/agent-rules.git	main	catalog/skills.tsv
+agent-rules	git	https://github.com/assurrussa/agent-rules.git	main	catalog/skills.tsv
 mattpocock	git	https://github.com/mattpocock/skills	main	catalog/skills.tsv

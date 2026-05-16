@@ -337,7 +337,7 @@ func (m model) dashboardSection() string {
 }
 
 func dashboardSections() []string {
-	return []string{viewInstalled, viewSkills, viewSources, viewTargets, viewUpdate}
+	return []string{viewInstalled, viewSkills, viewSources}
 }
 
 func targetScopeLabel(target, scope string) string {
@@ -532,8 +532,6 @@ func sectionTitle(section string) string {
 		return "Sources"
 	case viewTargets:
 		return labelTargets
-	case viewUpdate:
-		return "Update"
 	default:
 		return "Skills"
 	}

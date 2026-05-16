@@ -812,8 +812,10 @@ func renderSourceStatuses(out io.Writer, statuses []core.SourceStatus, tsv bool)
 		_, _ = fmt.Fprintln(out, core.SourceStatusesHeader)
 		for _, row := range statuses {
 			_, _ = fmt.Fprintf(out, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-				row.Name, row.Type, row.Status, formatSourceStatusTime(row.LastSyncedAt),
-				row.CachePath, row.Ref, row.Catalog, row.Location, row.Message)
+				sanitizeTSVField(row.Name), sanitizeTSVField(row.Type), sanitizeTSVField(row.Status),
+				sanitizeTSVField(formatSourceStatusTime(row.LastSyncedAt)), sanitizeTSVField(row.CachePath),
+				sanitizeTSVField(row.Ref), sanitizeTSVField(row.Catalog), sanitizeTSVField(row.Location),
+				sanitizeTSVField(row.Message))
 		}
 		return
 	}
@@ -844,6 +846,13 @@ func formatSourceStatusTime(value time.Time) string {
 		return "-"
 	}
 	return value.UTC().Format(time.RFC3339)
+}
+
+func sanitizeTSVField(value string) string {
+	value = strings.ReplaceAll(value, "\t", " ")
+	value = strings.ReplaceAll(value, "\r", " ")
+	value = strings.ReplaceAll(value, "\n", " ")
+	return strings.TrimSpace(strings.Join(strings.Fields(value), " "))
 }
 
 func truncateTableCell(value string, width int) string {

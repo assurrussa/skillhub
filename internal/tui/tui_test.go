@@ -706,15 +706,13 @@ func TestDashboardRendersSectionNavigation(t *testing.T) {
 		"1 Installed",
 		"2 Skills",
 		"3 Sources",
-		"4 Targets",
-		"5 Update",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected dashboard navigation to contain %q, got:\n%s", want, view)
 		}
 	}
-	if strings.Contains(view, "Usage") || strings.Contains(view, "6 Update") {
-		t.Fatalf("expected usage navigation and section 6 to be removed, got:\n%s", view)
+	if strings.Contains(view, "4 Targets") || strings.Contains(view, "5 Update") || strings.Contains(view, "Usage") {
+		t.Fatalf("expected targets/update dashboard sections to be removed, got:\n%s", view)
 	}
 }
 
@@ -1182,7 +1180,7 @@ func TestInstalledArgsWithLegacyEnv(t *testing.T) {
 
 func TestParseActiveSourcesTSV(t *testing.T) {
 	input := "name\ttype\tlocation\tref\tcatalog\n" +
-		testSourceAgentRules + "\t" + testSourceTypeGit + "\tgit@github.com:assurrussa/agent-rules.git\t" +
+		testSourceAgentRules + "\t" + testSourceTypeGit + "\thttps://github.com/assurrussa/agent-rules.git\t" +
 		testSourceRefMain + "\t" + testCatalogSkillsPath + "\n"
 
 	sources, err := tui.ParseSourcesTSV(input)
@@ -1194,33 +1192,33 @@ func TestParseActiveSourcesTSV(t *testing.T) {
 	}
 }
 
-func TestUpdateScreenShowsCommandsWithoutRunningSelfUpdate(t *testing.T) {
+func TestHelpShowsUpdateCommandsWithoutRunningSelfUpdate(t *testing.T) {
 	m := tui.InitialModel(".")
 	m.Loading = false
 	m.Width = 120
 	m.Height = 30
-	m.ViewMode = tui.ViewUpdate
+	m.ViewMode = tui.ViewHelp
 
 	view := stripANSI(m.View())
 	for _, want := range []string{
-		"Update",
+		"Update and restore",
 		"skillhub update",
 		"skillhub update --cascade",
 		"skillhub update --cascade -v",
 		"skillhub installed update",
 	} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("expected update screen to contain %q, got:\n%s", want, view)
+			t.Fatalf("expected help to contain %q, got:\n%s", want, view)
 		}
 	}
 }
 
-func TestUpdateScreenShowsProjectLockfileStatus(t *testing.T) {
+func TestHelpShowsProjectLockfileStatus(t *testing.T) {
 	m := tui.InitialModel(".")
 	m.Loading = false
 	m.Width = 120
 	m.Height = 30
-	m.ViewMode = tui.ViewUpdate
+	m.ViewMode = tui.ViewHelp
 	m.LockStatus = tui.ProjectLockStatus{
 		Present:   true,
 		Total:     3,
@@ -1234,14 +1232,14 @@ func TestUpdateScreenShowsProjectLockfileStatus(t *testing.T) {
 	for _, want := range []string{
 		"Project lockfile",
 		"present",
-		"Rows: 3",
-		"Missing: 1",
-		"Changed: 1",
-		"Skipped: 1",
+		"rows=3",
+		"missing=1",
+		"changed=1",
+		"skipped=1",
 		"r restore project lockfile",
 	} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("expected update screen to contain %q, got:\n%s", want, view)
+			t.Fatalf("expected help to contain %q, got:\n%s", want, view)
 		}
 	}
 }
@@ -1249,7 +1247,7 @@ func TestUpdateScreenShowsProjectLockfileStatus(t *testing.T) {
 func TestUpdateRestoreStartsBusyCommand(t *testing.T) {
 	m := tui.InitialModel(".")
 	m.Loading = false
-	m.ViewMode = tui.ViewUpdate
+	m.ViewMode = tui.ViewHelp
 	m.ProjectDir = testProjectPath
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
@@ -1265,21 +1263,41 @@ func TestUpdateRestoreStartsBusyCommand(t *testing.T) {
 func TestRestoreSummarySurvivesUpdateReload(t *testing.T) {
 	m := tui.InitialModel(".")
 	m.Loading = false
-	m.ViewMode = tui.ViewUpdate
+	m.ViewMode = tui.ViewHelp
 
 	updated, _ := m.Update(tui.CommandDoneMsg{
 		Action: "Restore project",
 		Output: "Restored project Skills: installed=1 updated=0 unchanged=0 skipped=0 failed=0\n",
 	})
 	m = asModel(t, updated)
-	if !m.Loading || m.ViewMode != tui.ViewUpdate {
-		t.Fatalf("expected update screen to reload after restore, view=%q loading=%v", m.ViewMode, m.Loading)
+	if m.Loading || m.ViewMode != tui.ViewHelp {
+		t.Fatalf("expected help to reload after restore, view=%q loading=%v", m.ViewMode, m.Loading)
 	}
 
 	updated, _ = m.Update(tui.LockStatusLoadedMsg{Status: tui.ProjectLockStatus{Present: true, Total: 1, Unchanged: 1}})
 	m = asModel(t, updated)
 	if !strings.Contains(m.Status, "Restored project Skills: installed=1 updated=0 unchanged=0 skipped=0 failed=0") {
 		t.Fatalf("expected restore summary to remain visible, got %q", m.Status)
+	}
+}
+
+func TestLockStatusLoadedDoesNotClearOtherViewLoading(t *testing.T) {
+	m := tui.InitialModel(".")
+	m.Loading = true
+	m.ViewMode = tui.ViewSources
+	m.Status = "Loading sources..."
+	m.PostReloadStatus = "Restored project Skills: installed=1 updated=0 unchanged=0 skipped=0 failed=0"
+
+	updated, _ := m.Update(tui.LockStatusLoadedMsg{Status: tui.ProjectLockStatus{Present: true, Total: 1}})
+	m = asModel(t, updated)
+	if !m.Loading {
+		t.Fatalf("stale lock status should not clear another view's loading state")
+	}
+	if m.Status != "Loading sources..." {
+		t.Fatalf("stale lock status should not overwrite current status, got %q", m.Status)
+	}
+	if m.PostReloadStatus != "" {
+		t.Fatalf("expected stale restore status to be consumed, got %q", m.PostReloadStatus)
 	}
 }
 
@@ -1397,18 +1415,37 @@ func TestQuestionMarkOpensHelpOverlay(t *testing.T) {
 	view := stripANSI(m.View())
 	for _, want := range []string{
 		"Help",
-		"1/2/3/4/5",
+		"1/2/3",
 		"left/right",
-		"u           update highlighted install or source entry",
-		"U           update all Sources",
-		"s           update all Sources",
-		"x           uninstall",
-		"[M]         managed by Skillhub",
-		"[ ]         unmanaged local skill",
+		"skillhub update",
+		"skillhub installed update",
+		"skillhub installed usage update --projects",
+		"r restore project lockfile",
+		"Installed: enter locations",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected help overlay to contain %q, got:\n%s", want, view)
 		}
+	}
+}
+
+func TestQuestionMarkClosesHelpOverlay(t *testing.T) {
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.Width = 120
+	m.Height = 30
+	m.ViewMode = tui.ViewSkills
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("?")})
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewHelp {
+		t.Fatalf("expected help view, got %q", m.ViewMode)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("?")})
+	m = asModel(t, updated)
+	if m.ViewMode != tui.ViewSkills {
+		t.Fatalf("expected second question mark to return to skills, got %q", m.ViewMode)
 	}
 }
 
@@ -1470,21 +1507,21 @@ func TestNumberKeysUseInstalledFirstDashboardOrder(t *testing.T) {
 	m.Loading = false
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("4")})
 	m = asModel(t, updated)
-	if m.ViewMode != tui.ViewTargets || !m.Loading {
-		t.Fatalf("expected 4 to load targets section, got view=%q loading=%v", m.ViewMode, m.Loading)
+	if m.ViewMode != tui.ViewSources || m.Loading {
+		t.Fatalf("expected 4 to be ignored, got view=%q loading=%v", m.ViewMode, m.Loading)
 	}
 
 	m.Loading = false
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("5")})
 	m = asModel(t, updated)
-	if m.ViewMode != tui.ViewUpdate || !m.Loading {
-		t.Fatalf("expected 5 to load update section, got view=%q loading=%v", m.ViewMode, m.Loading)
+	if m.ViewMode != tui.ViewSources || m.Loading {
+		t.Fatalf("expected 5 to be ignored, got view=%q loading=%v", m.ViewMode, m.Loading)
 	}
 
 	m.Loading = false
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("6")})
 	m = asModel(t, updated)
-	if m.ViewMode != tui.ViewUpdate || m.Loading {
+	if m.ViewMode != tui.ViewSources || m.Loading {
 		t.Fatalf("expected 6 to be ignored, got view=%q loading=%v", m.ViewMode, m.Loading)
 	}
 }
@@ -1724,7 +1761,7 @@ func TestSmallHeightViewKeepsDashboardHeaderVisible(t *testing.T) {
 	m.ApplyFilter()
 
 	view := stripANSI(m.View())
-	for _, want := range []string{"Skillhub", "Sources: 2", "1 Installed", "2 Skills", "5 Update"} {
+	for _, want := range []string{"Skillhub", "Sources: 2", "1 Installed", "2 Skills", "3 Sources"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected small-height view to keep dashboard text %q visible, got:\n%s", want, view)
 		}
@@ -1736,7 +1773,7 @@ func TestSmallHeightViewKeepsDashboardHeaderVisible(t *testing.T) {
 
 func TestParseDefaultSourcesTSV(t *testing.T) {
 	input := "name\ttype\tlocation\tref\tcatalog\n" +
-		testSourceAgentRules + "\t" + testSourceTypeGit + "\tgit@github.com:assurrussa/agent-rules.git\t" +
+		testSourceAgentRules + "\t" + testSourceTypeGit + "\thttps://github.com/assurrussa/agent-rules.git\t" +
 		testSourceRefMain + "\t" + testCatalogSkillsPath + "\n"
 
 	sources, err := tui.ParseDefaultSourcesTSV(input)
@@ -2466,6 +2503,64 @@ func TestSkillsScrollKeepsCursorVisibleAtSmallHeight(t *testing.T) {
 	}
 	if got := lipgloss.Height(view); got > m.Height {
 		t.Fatalf("expected skills view to fit height %d, got %d lines:\n%s", m.Height, got, view)
+	}
+}
+
+func TestSkillsScrollKeepsCursorVisibleWithWrappedGroupedCards(t *testing.T) {
+	m := tui.InitialModel(".")
+	m.Loading = false
+	m.Width = 88
+	m.Height = 30
+	m.ViewMode = tui.ViewSkills
+	longDescription := strings.Repeat(
+		"Detailed cursor visibility text wraps across several terminal lines so earlier cards can exhaust the panel body. ",
+		3,
+	)
+	m.Skills = []tui.Skill{
+		{
+			Source:      "alpha",
+			Name:        "skill-00",
+			Category:    "backend",
+			Triggers:    "alpha-backend",
+			Description: longDescription,
+		},
+		{
+			Source:      "alpha",
+			Name:        "skill-01",
+			Category:    "frontend",
+			Triggers:    "alpha-frontend",
+			Description: longDescription,
+		},
+		{
+			Source:      "beta",
+			Name:        "skill-02",
+			Category:    "go",
+			Triggers:    "beta-go",
+			Description: longDescription,
+		},
+		{
+			Source:      "beta",
+			Name:        "skill-03",
+			Category:    "go",
+			Description: "Short skill description.",
+		},
+	}
+	m.ApplyFilter()
+
+	for i := 0; i < 2; i++ {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = asModel(t, updated)
+	}
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "›") || !strings.Contains(view, "skill-02") {
+		t.Fatalf("expected selected wrapped skill row to stay visible, got:\n%s", view)
+	}
+	if strings.Contains(view, "skill-00") {
+		t.Fatalf("expected wrapped skills view to scroll away from first row, got:\n%s", view)
+	}
+	if got := lipgloss.Height(view); got > m.Height {
+		t.Fatalf("expected wrapped skills view to fit height %d, got %d lines:\n%s", m.Height, got, view)
 	}
 }
 

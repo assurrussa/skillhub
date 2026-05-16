@@ -894,6 +894,47 @@ func TestSourcesStatusTSVShowsCacheFreshness(t *testing.T) {
 	}
 }
 
+func TestSourcesStatusTSVSanitizesMultilineMessages(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config: %v", err)
+	}
+	sources := core.SourcesHeader + "\n" +
+		"broken\tgit\t" + filepath.Join(tmp, "remote") + "\tmain\tcatalog/skills.tsv\n"
+	if err := os.WriteFile(filepath.Join(configDir, "sources.tsv"), []byte(sources), 0o644); err != nil {
+		t.Fatalf("write sources: %v", err)
+	}
+	sourcePath := filepath.Join(cacheDir, "sources", "broken")
+	if err := os.MkdirAll(sourcePath, 0o755); err != nil {
+		t.Fatalf("mkdir cached source: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourcePath, ".git"), []byte("not a gitfile\n"), 0o644); err != nil {
+		t.Fatalf("write invalid gitfile: %v", err)
+	}
+
+	stdout, stderr, err := runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "sources", "status", "--tsv")
+	if err != nil {
+		t.Fatalf("sources status failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	lines := strings.Split(strings.TrimSpace(stdout), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected one TSV data row, got stdout:\n%s", stdout)
+	}
+	fields := strings.Split(lines[1], "\t")
+	if len(fields) != 9 {
+		t.Fatalf("expected 9 TSV fields, got %d in stdout:\n%s", len(fields), stdout)
+	}
+	if !strings.Contains(fields[8], "git config --get remote.origin.url failed") ||
+		!strings.Contains(fields[8], "fatal:") {
+		t.Fatalf("expected sanitized git error message, got fields %#v from stdout:\n%s", fields, stdout)
+	}
+}
+
 func TestSourcesStatusHumanOutput(t *testing.T) {
 	tmp := t.TempDir()
 	configDir := filepath.Join(tmp, "config")

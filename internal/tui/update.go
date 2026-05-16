@@ -172,15 +172,21 @@ func (m model) updateTargetsLoaded(msg targetsLoadedMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateLockStatusLoaded(msg lockStatusLoadedMsg) (tea.Model, tea.Cmd) {
-	m.loading = false
-	m.viewMode = viewUpdate
 	if msg.err != nil {
-		m.postReloadStatus = ""
-		m.status = "Load project lockfile status failed: " + msg.err.Error()
+		if m.viewMode == viewHelp {
+			m.postReloadStatus = ""
+			m.status = "Load project lockfile status failed: " + msg.err.Error()
+		} else if strings.TrimSpace(m.postReloadStatus) != "" {
+			m.postReloadStatus = ""
+		}
 		return m, nil
 	}
 	m.lockStatus = msg.status
-	m.applyPostReloadStatus("Loaded project lockfile status.")
+	if m.viewMode == viewHelp {
+		m.applyPostReloadStatus("Loaded project lockfile status.")
+	} else if strings.TrimSpace(m.postReloadStatus) != "" {
+		m.postReloadStatus = ""
+	}
 	return m, nil
 }
 
@@ -299,8 +305,8 @@ func (m model) afterCommandSuccess(action, successStatus string) (tea.Model, tea
 		return m, loadInstalled(m.repoRoot)
 	}
 	if action == "Restore project" {
-		m.loading = true
-		m.viewMode = viewUpdate
+		m.loading = false
+		m.viewMode = viewHelp
 		m.postReloadStatus = successStatus
 		m.status = "Reloading project lockfile..."
 		return m, loadProjectLockStatus(m.repoRoot, m.projectDir)
@@ -351,12 +357,12 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.installFlow().updateConfirmKey(msg)
 	}
 
-	if handled, next, cmd := m.updateGlobalKey(msg); handled {
-		return next, cmd
-	}
-
 	if m.viewMode == viewHelp {
 		return m.updateHelpKey(msg)
+	}
+
+	if handled, next, cmd := m.updateGlobalKey(msg); handled {
+		return next, cmd
 	}
 
 	if m.viewMode == viewConfirmDelete {
@@ -388,10 +394,6 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if m.viewMode == viewSources {
 		return m.sourcesSection().updateKey(msg)
-	}
-
-	if m.viewMode == viewUpdate {
-		return m.updateUpdateKey(msg)
 	}
 
 	if m.viewMode == viewDefaults {
@@ -454,7 +456,7 @@ func (m model) updateGlobalKey(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
 		m.previousViewMode = m.viewMode
 		m.viewMode = viewHelp
 		m.status = "Help."
-		return true, m, nil
+		return true, m, loadProjectLockStatus(m.repoRoot, m.projectDir)
 	case "left":
 		if m.canMoveDashboardSection() {
 			next, cmd := m.moveDashboardSection(-1)
@@ -475,12 +477,6 @@ func (m model) updateGlobalKey(msg tea.KeyMsg) (bool, tea.Model, tea.Cmd) {
 		return true, next, cmd
 	case "3":
 		next, cmd := m.openDashboardSection(viewSources)
-		return true, next, cmd
-	case "4":
-		next, cmd := m.openDashboardSection(viewTargets)
-		return true, next, cmd
-	case "5":
-		next, cmd := m.openDashboardSection(viewUpdate)
 		return true, next, cmd
 	default:
 		return false, m, nil
@@ -542,8 +538,6 @@ func (m model) updateSkillsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.viewMode = viewAddSource
 		m.status = statusEnterSource
 		return m, nil
-	case "t":
-		return m.openDashboardSection(viewTargets)
 	case "r":
 		return m.reloadCurrentView("Reloading catalog...")
 	case "s":
@@ -597,14 +591,6 @@ func (m model) reloadCurrentView(status string) (tea.Model, tea.Cmd) {
 	case viewSources:
 		m.viewMode = viewSources
 		return m, loadSources(m.repoRoot)
-	case viewTargets:
-		m.viewMode = viewTargets
-		return m, loadTargets(m.repoRoot)
-	case viewUpdate:
-		m.loading = true
-		m.viewMode = viewUpdate
-		m.status = "Loading project lockfile status..."
-		return m, loadProjectLockStatus(m.repoRoot, m.projectDir)
 	default:
 		m.viewMode = viewSkills
 		m.loadingSkills = true
@@ -634,17 +620,6 @@ func (m model) openDashboardSection(section string) (tea.Model, tea.Cmd) {
 		m.viewMode = viewSources
 		m.status = "Loading sources..."
 		return m, loadSources(m.repoRoot)
-	case viewTargets:
-		m.loading = true
-		m.install.targetPurpose = "browse"
-		m.viewMode = viewTargets
-		m.status = "Loading targets..."
-		return m, loadTargets(m.repoRoot)
-	case viewUpdate:
-		m.loading = true
-		m.viewMode = viewUpdate
-		m.status = "Loading project lockfile status..."
-		return m, loadProjectLockStatus(m.repoRoot, m.projectDir)
 	default:
 		return m, nil
 	}
@@ -690,7 +665,7 @@ func (m model) currentViewLoading() bool {
 
 func (m model) canMoveDashboardSection() bool {
 	switch m.viewMode {
-	case viewSkills, viewInstalled, viewSources, viewUpdate:
+	case viewSkills, viewInstalled, viewSources:
 		return true
 	case viewTargets:
 		return m.install.targetPurpose != targetPurposeInstall
@@ -749,6 +724,10 @@ func (m model) updateHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q":
 		return m, tea.Quit
+	case "r":
+		m.busy = true
+		m.status = "Restoring project skills from skills.lock.toml..."
+		return m, tea.Batch(runSkillCommand(m.repoRoot, "Restore project", "restore", flagProject, m.projectDir, "-v"), busyTick())
 	case keyEsc, keyEnter, "?":
 		if m.previousViewMode != "" {
 			m.viewMode = m.previousViewMode
@@ -1025,24 +1004,6 @@ func (m model) startSourceSyncProgress(sources []SourcePreset) (tea.Model, tea.C
 	item, _ := m.sourceProgress.currentItem()
 	m.status = m.sourceSyncProgressStatus()
 	return m, tea.Batch(runSourceSyncStepCommand(m.repoRoot, item), busyTick())
-}
-
-func (m model) updateUpdateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "q":
-		return m, tea.Quit
-	case "u":
-		m.loading = true
-		m.viewMode = viewInstalled
-		m.status = statusLoadingInstalled
-		return m, loadInstalled(m.repoRoot)
-	case "r":
-		m.busy = true
-		m.status = "Restoring project skills from skills.lock.toml..."
-		return m, tea.Batch(runSkillCommand(m.repoRoot, "Restore project", "restore", flagProject, m.projectDir, "-v"), busyTick())
-	default:
-		return m, nil
-	}
 }
 
 func (m model) updateAddSourceKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

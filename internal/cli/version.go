@@ -102,7 +102,7 @@ func resolveInstallScript() (string, error) {
 		}
 	}
 
-	repoRoot, err := resolveRepoRoot()
+	repoRoot, err := resolveRequiredRepoRoot()
 	if err != nil {
 		return "", err
 	}

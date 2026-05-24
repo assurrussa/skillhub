@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	runtimeDefaults "github.com/assurrussa/skillhub/defaults"
 )
 
 const sourceTTL = 10 * time.Minute
@@ -44,11 +46,24 @@ func (b *Backend) ListSources() ([]Source, error) {
 }
 
 func (b *Backend) ListDefaultSources() ([]Source, error) {
-	rows, err := sourcesTable.ReadFile(b.DefaultSourcesFile())
+	rows, err := b.readDefaultSources()
 	if err != nil {
 		return nil, err
 	}
 	return validateSources(rows)
+}
+
+func (b *Backend) readDefaultSources() ([]Source, error) {
+	if b.repoRoot != "" {
+		rows, err := sourcesTable.ReadFile(b.DefaultSourcesFile())
+		if err == nil {
+			return rows, nil
+		}
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+	}
+	return sourcesTable.ReadString("embedded defaults/sources.tsv", runtimeDefaults.SourcesTSV)
 }
 
 func (b *Backend) ListSourceStatuses() ([]SourceStatus, error) {
@@ -428,7 +443,7 @@ func (b *Backend) SourcePath(source Source) (string, error) {
 		if filepath.IsAbs(source.Location) {
 			return source.Location, nil
 		}
-		return filepath.Join(b.repoRoot, source.Location), nil
+		return filepath.Join(b.commandDir(), source.Location), nil
 	case SourceTypeGit:
 		return b.cachedGitSourcePath(source.Name)
 	default:
@@ -561,7 +576,7 @@ func (b *Backend) fetchOrCloneGitSource(source Source, sourcePath string) error 
 		_, err := b.gitOutput(sourcePath, "fetch", "--quiet", "--prune")
 		return err
 	}
-	_, err := b.gitOutput(b.repoRoot, "clone", "--quiet", source.Location, sourcePath)
+	_, err := b.gitOutput(b.commandDir(), "clone", "--quiet", source.Location, sourcePath)
 	return err
 }
 
@@ -684,7 +699,7 @@ func (b *Backend) cachedGitOriginMatches(source Source, sourcePath string) (bool
 }
 
 func (b *Backend) resolvedGitURL(rawURL string) (string, error) {
-	resolved, err := b.gitOutput(b.repoRoot, "ls-remote", "--get-url", rawURL)
+	resolved, err := b.gitOutput(b.commandDir(), "ls-remote", "--get-url", rawURL)
 	if err != nil {
 		return "", err
 	}

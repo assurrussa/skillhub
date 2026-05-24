@@ -18,10 +18,11 @@ const (
 )
 
 const (
-	TargetCodex     = "codex"
-	TargetClaude    = "claude"
-	TargetGemini    = "gemini"
-	TargetDirectory = "directory"
+	TargetCodex       = "codex"
+	TargetClaude      = "claude"
+	TargetGemini      = "gemini"
+	TargetAntigravity = "antigravity"
+	TargetDirectory   = "directory"
 
 	ScopeGlobal  = "global"
 	ScopeProject = "project"

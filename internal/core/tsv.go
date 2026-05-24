@@ -37,6 +37,18 @@ func (t Table[T]) ReadFile(path string) ([]T, error) {
 	if err != nil {
 		return nil, err
 	}
+	return t.parseRows(rows)
+}
+
+func (t Table[T]) ReadString(label, data string) ([]T, error) {
+	rows, err := readTSV(strings.NewReader(data), label, t.Header, t.Columns)
+	if err != nil {
+		return nil, err
+	}
+	return t.parseRows(rows)
+}
+
+func (t Table[T]) parseRows(rows [][]string) ([]T, error) {
 	out := make([]T, 0, len(rows))
 	for _, row := range rows {
 		item, err := t.Parse(row)

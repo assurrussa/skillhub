@@ -13,10 +13,11 @@ const (
 	commandUninstall = "uninstall"
 	commandUpdate    = "update"
 
-	labelCodex   = "Codex"
-	labelClaude  = "Claude"
-	labelGemini  = "Gemini"
-	labelTargets = "Targets"
+	labelCodex       = "Codex"
+	labelClaude      = "Claude"
+	labelGemini      = "Gemini"
+	labelAntigravity = "Antigravity"
+	labelTargets     = "Targets"
 
 	statusLoadingInstalled = "Loading installed skills..."
 	statusEnterSource      = "Enter a source path or git URL."
@@ -38,6 +39,7 @@ const (
 	targetClaude          = "claude"
 	targetDirectory       = "directory"
 	targetGemini          = "gemini"
+	targetAntigravity     = "antigravity"
 	targetOpenCode        = "opencode"
 	targetPurposeInstall  = "install"
 	targetStatusSupported = "supported"

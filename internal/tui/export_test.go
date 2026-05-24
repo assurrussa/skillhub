@@ -9,9 +9,10 @@ const (
 	FlagProject = flagProject
 	FlagTarget  = flagTarget
 
-	LabelCodex  = labelCodex
-	LabelClaude = labelClaude
-	LabelGemini = labelGemini
+	LabelCodex       = labelCodex
+	LabelClaude      = labelClaude
+	LabelGemini      = labelGemini
+	LabelAntigravity = labelAntigravity
 
 	ManagedYes = managedYes
 
@@ -23,6 +24,7 @@ const (
 	TargetClaude          = targetClaude
 	TargetDirectory       = targetDirectory
 	TargetGemini          = targetGemini
+	TargetAntigravity     = targetAntigravity
 	TargetPurposeInstall  = targetPurposeInstall
 	TargetStatusSupported = targetStatusSupported
 

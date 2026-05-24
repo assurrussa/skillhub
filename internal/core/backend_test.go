@@ -13,7 +13,10 @@ import (
 	"github.com/assurrussa/skillhub/internal/core"
 )
 
-const ruleSelector = "rules-selector"
+const (
+	ruleSelector = "rules-selector"
+	testEnvHome  = "HOME"
+)
 
 func writeCoreRepo(t *testing.T, root string) {
 	t.Helper()
@@ -102,7 +105,7 @@ func coreBackend(
 ) *core.Backend {
 	t.Helper()
 	env := map[string]string{
-		"HOME":                filepath.Join(filepath.Dir(configDir), "home"),
+		testEnvHome:           filepath.Join(filepath.Dir(configDir), "home"),
 		"SKILLHUB_CONFIG_DIR": configDir,
 		"SKILLHUB_CACHE_DIR":  cacheDir,
 	}
@@ -709,6 +712,89 @@ func TestCoreTargetRootRejectsInvalidScope(t *testing.T) {
 	_, err := backend.TargetRoot(core.TargetRootOptions{Target: core.TargetCodex, Scope: "nope"})
 	if err == nil || !strings.Contains(err.Error(), "invalid scope") {
 		t.Fatalf("expected invalid scope error, got %v", err)
+	}
+}
+
+func TestCoreTargetRootResolvesAntigravityPaths(t *testing.T) {
+	tmp := t.TempDir()
+	repo := filepath.Join(tmp, "repo")
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	projectDir := filepath.Join(tmp, "project")
+	homeDir := filepath.Join(tmp, "home")
+	writeCoreRepo(t, repo)
+	backend := coreBackend(t, repo, tmp, configDir, cacheDir, map[string]string{testEnvHome: homeDir})
+
+	globalRoot, err := backend.TargetRoot(core.TargetRootOptions{
+		Target: core.TargetAntigravity,
+		Scope:  core.ScopeGlobal,
+	})
+	if err != nil {
+		t.Fatalf("resolve antigravity global root: %v", err)
+	}
+	wantGlobal := filepath.Join(homeDir, ".gemini", "antigravity", "skills")
+	if globalRoot != wantGlobal {
+		t.Fatalf("expected antigravity global root %q, got %q", wantGlobal, globalRoot)
+	}
+
+	projectRoot, err := backend.TargetRoot(core.TargetRootOptions{
+		Target:  core.TargetAntigravity,
+		Scope:   core.ScopeProject,
+		Project: projectDir,
+	})
+	if err != nil {
+		t.Fatalf("resolve antigravity project root: %v", err)
+	}
+	wantProject := filepath.Join(projectDir, ".agents", "skills")
+	if projectRoot != wantProject {
+		t.Fatalf("expected antigravity project root %q, got %q", wantProject, projectRoot)
+	}
+}
+
+func TestCoreStandaloneBackendUsesEmbeddedRegistries(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	callerDir := filepath.Join(tmp, "caller")
+	homeDir := filepath.Join(tmp, "home")
+	if err := os.MkdirAll(callerDir, 0o755); err != nil {
+		t.Fatalf("mkdir caller: %v", err)
+	}
+	backend := coreBackend(t, "", callerDir, configDir, cacheDir, map[string]string{testEnvHome: homeDir})
+
+	sources, err := backend.ListDefaultSources()
+	if err != nil {
+		t.Fatalf("list embedded default sources: %v", err)
+	}
+	if len(sources) == 0 || sources[0].Name != core.SourceNameAgentRules {
+		t.Fatalf("expected embedded default sources, got %#v", sources)
+	}
+	targets, err := backend.ListTargets()
+	if err != nil {
+		t.Fatalf("list embedded targets: %v", err)
+	}
+	foundAntigravity := false
+	for _, target := range targets {
+		if target.ID == core.TargetAntigravity {
+			foundAntigravity = true
+		}
+	}
+	if !foundAntigravity {
+		t.Fatalf("expected embedded antigravity target, got %#v", targets)
+	}
+	path, err := backend.SourcePath(core.Source{
+		Name:     "relative",
+		Type:     core.SourceTypePath,
+		Location: "relative-source",
+		Ref:      "-",
+		Catalog:  "catalog/skills.tsv",
+	})
+	if err != nil {
+		t.Fatalf("resolve relative source path: %v", err)
+	}
+	wantPath := filepath.Join(callerDir, "relative-source")
+	if path != wantPath {
+		t.Fatalf("expected relative source path %q, got %q", wantPath, path)
 	}
 }
 

@@ -304,8 +304,10 @@ func targetDisplayRank(target string) int {
 		return 2
 	case targetGemini:
 		return 3
-	case targetOpenCode:
+	case targetAntigravity:
 		return 4
+	case targetOpenCode:
+		return 5
 	default:
 		return 20
 	}

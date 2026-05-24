@@ -349,6 +349,8 @@ func targetScopeLabel(target, scope string) string {
 		label = labelClaude
 	case targetGemini:
 		label = labelGemini
+	case targetAntigravity:
+		label = labelAntigravity
 	case targetOpenCode:
 		label = "OpenCode"
 	}

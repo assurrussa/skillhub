@@ -20,12 +20,13 @@ type Backend struct {
 
 func New(ctx Context) (*Backend, error) {
 	repoRoot := strings.TrimSpace(ctx.RepoRoot)
-	if repoRoot == "" {
-		return nil, errors.New("repo root is required")
-	}
-	absRepo, err := filepath.Abs(repoRoot)
-	if err != nil {
-		return nil, err
+	absRepo := ""
+	if repoRoot != "" {
+		var err error
+		absRepo, err = filepath.Abs(repoRoot)
+		if err != nil {
+			return nil, err
+		}
 	}
 	cwd := strings.TrimSpace(ctx.CallerCWD)
 	if cwd == "" {
@@ -70,6 +71,13 @@ func (b *Backend) RepoRoot() string {
 }
 
 func (b *Backend) CallerCWD() string {
+	return b.callerCWD
+}
+
+func (b *Backend) commandDir() string {
+	if b.repoRoot != "" {
+		return b.repoRoot
+	}
 	return b.callerCWD
 }
 
@@ -219,6 +227,14 @@ func (b *Backend) defaultGeminiRoot() (string, error) {
 	return filepath.Join(home, ".gemini", "skills"), nil
 }
 
+func (b *Backend) defaultAntigravityRoot() (string, error) {
+	home := strings.TrimSpace(b.envValue("HOME"))
+	if home == "" {
+		return "", errors.New("HOME is not set; use --target directory --dir <path>")
+	}
+	return filepath.Join(home, ".gemini", "antigravity", "skills"), nil
+}
+
 func (b *Backend) defaultOpenCodeRoot() (string, error) {
 	if value := strings.TrimSpace(b.envValue("OPENCODE_CONFIG_DIR")); value != "" {
 		return filepath.Join(value, "skills"), nil
@@ -272,6 +288,14 @@ func (b *Backend) skillDirTargetRoot(opts TargetRootOptions, target, scope strin
 			return "", err
 		}
 		return b.scopedSkillDirRoot(scope, opts.Project, ".gemini")
+	case TargetAntigravity:
+		if err := validateTargetScope(scope); err != nil {
+			return "", err
+		}
+		if scope == ScopeProject {
+			return b.scopedSkillDirRoot(scope, opts.Project, ".agents")
+		}
+		return b.defaultAntigravityRoot()
 	case "opencode":
 		if err := validateTargetScope(scope); err != nil {
 			return "", err

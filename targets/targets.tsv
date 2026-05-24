@@ -3,6 +3,7 @@ codex	Codex	supported	skill-dir	Install SKILL.md packages into a Codex-compatibl
 directory	Directory	supported	skill-dir	Install SKILL.md packages into an explicit directory.
 claude	Claude	supported	skill-dir	Install SKILL.md packages into Claude Code personal or project skills directories.
 gemini	Gemini	supported	skill-dir	Install SKILL.md packages into Gemini CLI user or workspace skills directories.
+antigravity	Antigravity	supported	skill-dir	Install SKILL.md packages into Antigravity global or workspace skills directories.
 opencode	OpenCode	supported	skill-dir	Install SKILL.md packages into OpenCode global or project skills directories.
 cursor	Cursor	planned	planned	Adapter planned; exact target format is not written by v1.
 copilot	Copilot	planned	planned	Adapter planned; exact target format is not written by v1.

@@ -196,6 +196,10 @@ skillhub update --cascade
 skillhub update --cascade -v
 ```
 
+`skillhub update` prints the currently running version before rebuilding and
+the newly installed version after rebuilding. Without `--bin-dir`, it updates
+the directory of the currently running `skillhub` executable.
+
 `--cascade` updates Skillhub, then managed target installs, then project-scope
 usage rows recorded in `installed.tsv`.
 

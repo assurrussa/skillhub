@@ -743,7 +743,18 @@ func resolveRepoRoot() (string, error) {
 			return root, nil
 		}
 	}
-	return "", errors.New("skillhub repository not found; run from the checkout or set SKILLHUB_REPO")
+	return "", nil
+}
+
+func resolveRequiredRepoRoot() (string, error) {
+	repoRoot, err := resolveRepoRoot()
+	if err != nil {
+		return "", err
+	}
+	if repoRoot == "" {
+		return "", errors.New("skillhub repository not found; run from the checkout or set SKILLHUB_REPO")
+	}
+	return repoRoot, nil
 }
 
 func cleanRepoRoot(path string) (string, error) {

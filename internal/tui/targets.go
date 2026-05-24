@@ -236,7 +236,7 @@ func (m model) targetSkillRoot(target, scope string) string {
 
 func isNativeScopedTarget(target string) bool {
 	switch target {
-	case targetCodex, targetClaude, targetGemini, targetOpenCode:
+	case targetCodex, targetClaude, targetGemini, targetAntigravity, targetOpenCode:
 		return true
 	default:
 		return false

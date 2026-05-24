@@ -233,9 +233,7 @@ fi
 mkdir -p "$bin_dir"
 
 command_path="$bin_dir/skillhub"
-binary_path="$bin_dir/.skillhub-bin"
-binary_tmp_path="$binary_path.tmp.$$"
-tmp_path="$command_path.tmp.$$"
+binary_tmp_path="$command_path.tmp.$$"
 
 version="${SKILLHUB_VERSION:-dev}"
 commit="unknown"
@@ -256,17 +254,7 @@ ldflags="$ldflags -X github.com/assurrussa/skillhub/internal/cli.installScript=$
 
 (cd "$repo_root" && go build -ldflags "$ldflags" -o "$binary_tmp_path" ./cmd/skillhub)
 chmod 755 "$binary_tmp_path"
-mv "$binary_tmp_path" "$binary_path"
-
-{
-  printf '#!/bin/sh\n'
-  printf 'SKILLHUB_REPO=%s\n' "$(printf '%s\n' "$repo_root" | sed "s/'/'\\\\''/g; s/^/'/; s/$/'/")"
-  printf 'export SKILLHUB_REPO\n'
-  printf 'exec %s "$@"\n' "$(printf '%s\n' "$binary_path" | sed "s/'/'\\\\''/g; s/^/'/; s/$/'/")"
-} > "$tmp_path"
-
-chmod 755 "$tmp_path"
-mv "$tmp_path" "$command_path"
+mv "$binary_tmp_path" "$command_path"
 
 printf 'Installed skillhub command to %s\n' "$command_path"
 printf 'Source checkout: %s\n' "$repo_root"

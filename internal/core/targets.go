@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+
+	runtimeTargets "github.com/assurrussa/skillhub/targets"
 )
 
 var targetsTable = Table[Target]{
@@ -18,7 +20,7 @@ var targetsTable = Table[Target]{
 }
 
 func (b *Backend) ListTargets() ([]Target, error) {
-	rows, err := targetsTable.ReadFile(b.TargetsFile())
+	rows, err := b.readTargets()
 	if err != nil {
 		return nil, err
 	}
@@ -49,6 +51,19 @@ func (b *Backend) ListTargets() ([]Target, error) {
 		return nil, errors.New("no targets configured")
 	}
 	return rows, nil
+}
+
+func (b *Backend) readTargets() ([]Target, error) {
+	if b.repoRoot != "" {
+		rows, err := targetsTable.ReadFile(b.TargetsFile())
+		if err == nil {
+			return rows, nil
+		}
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+	}
+	return targetsTable.ReadString("embedded targets/targets.tsv", runtimeTargets.TargetsTSV)
 }
 
 func (b *Backend) DetectTargets(project string) ([]TargetDetection, error) {
@@ -142,8 +157,10 @@ func targetRank(target string) int {
 		return 2
 	case TargetGemini:
 		return 3
-	case "opencode":
+	case TargetAntigravity:
 		return 4
+	case "opencode":
+		return 5
 	default:
 		return 20
 	}

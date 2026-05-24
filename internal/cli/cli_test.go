@@ -147,6 +147,43 @@ func runCLISplitForTest(t *testing.T, env []string, command string, args ...stri
 	return outBuf.String(), errBuf.String(), err
 }
 
+func runCLIStandaloneForTest(t *testing.T, cwd string, env []string, command string, args ...string) (string, error) {
+	t.Helper()
+	stdout, stderr, err := runCLIStandaloneSplitForTest(t, cwd, env, command, args...)
+	return stdout + stderr, err
+}
+
+func runCLIStandaloneSplitForTest(
+	t *testing.T,
+	cwd string,
+	env []string,
+	command string,
+	args ...string,
+) (stdout string, stderr string, err error) {
+	t.Helper()
+	cliArgs, err := commandCLIArgs(command, args...)
+	if err != nil {
+		return "", err.Error() + "\n", err
+	}
+	t.Chdir(cwd)
+	restoreEnv := applyTestEnv(append([]string{
+		"SKILLHUB_REPO=",
+		"SKILLHUB_CALLER_CWD=" + cwd,
+	}, env...))
+	defer restoreEnv()
+
+	var outBuf, errBuf bytes.Buffer
+	cmd := cli.NewRootCommand()
+	cmd.SetOut(&outBuf)
+	cmd.SetErr(&errBuf)
+	cmd.SetArgs(cliArgs)
+	err = cmd.Execute()
+	if err != nil {
+		_, _ = fmt.Fprintln(&errBuf, err)
+	}
+	return outBuf.String(), errBuf.String(), err
+}
+
 func commandCLIArgs(command string, args ...string) ([]string, error) {
 	switch command {
 	case testCommandSkills:
@@ -291,6 +328,77 @@ func TestTargetsListUsesGoBackend(t *testing.T) {
 	}
 	if got := out.String(); !strings.Contains(got, "codex\tCodex\tsupported\tskill-dir\tCodex skills") {
 		t.Fatalf("unexpected targets output:\n%s", got)
+	}
+}
+
+func TestTargetsListAndDetectIncludeAntigravity(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, "config")
+	homeDir := filepath.Join(tmp, "home")
+	projectDir := filepath.Join(tmp, "project")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+	env := []string{"SKILLHUB_CONFIG_DIR=" + configDir, "HOME=" + homeDir}
+
+	output, err := runCLIForTest(t, env, testCommandTargets, testSubcommandList, testFlagTSV)
+	if err != nil {
+		t.Fatalf("targets list failed: %v\n%s", err, output)
+	}
+	wantList := strings.Join([]string{
+		"antigravity",
+		"Antigravity",
+		"supported",
+		"skill-dir",
+		"Install SKILL.md packages into Antigravity global or workspace skills directories.",
+	}, "\t")
+	if !strings.Contains(output, wantList) {
+		t.Fatalf("expected antigravity target row %q, got:\n%s", wantList, output)
+	}
+
+	output, err = runCLIForTest(t, env, testCommandTargets, "detect", testFlagTSV, "--project", projectDir)
+	if err != nil {
+		t.Fatalf("targets detect failed: %v\n%s", err, output)
+	}
+	for _, want := range []string{
+		"antigravity\tglobal\tsupported\t" + filepath.Join(homeDir, ".gemini", "antigravity", "skills") + "\tno\t0\t0",
+		"antigravity\tproject\tsupported\t" + filepath.Join(projectDir, ".agents", "skills") + "\tno\t0\t0",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected antigravity detection row %q, got:\n%s", want, output)
+		}
+	}
+}
+
+func TestStandaloneCLIUsesEmbeddedRegistriesWithoutRepo(t *testing.T) {
+	tmp := t.TempDir()
+	cwd := filepath.Join(tmp, "cwd")
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	homeDir := filepath.Join(tmp, "home")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatalf("mkdir cwd: %v", err)
+	}
+	env := []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+		"HOME=" + homeDir,
+	}
+
+	output, err := runCLIStandaloneForTest(t, cwd, env, testCommandTargets, testSubcommandList, testFlagTSV)
+	if err != nil {
+		t.Fatalf("standalone targets list failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(output, "antigravity\tAntigravity\tsupported\tskill-dir") {
+		t.Fatalf("expected embedded antigravity target, got:\n%s", output)
+	}
+
+	output, err = runCLIStandaloneForTest(t, cwd, env, testCommandSources, testDirDefaults, testSubcommandList, testFlagTSV)
+	if err != nil {
+		t.Fatalf("standalone default sources list failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(output, "agent-rules\tgit\thttps://github.com/assurrussa/agent-rules.git") {
+		t.Fatalf("expected embedded agent-rules source, got:\n%s", output)
 	}
 }
 
@@ -1806,6 +1914,48 @@ func TestProjectInstallUsesCentralMetadataAndGitignore(t *testing.T) {
 	}
 	if gitIgnored(t, projectDir, ".agents/skills/rules-selector/SKILL.md") {
 		t.Fatalf("project skill content must remain trackable")
+	}
+}
+
+func TestProjectInstallSupportsAntigravityTarget(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, "config")
+	homeDir := filepath.Join(tmp, "home")
+	sourceDir := filepath.Join(tmp, "source")
+	projectDir := filepath.Join(tmp, "project")
+	writeInstallableTestSource(t, sourceDir, "rules-selector", "v1")
+	writeTestSources(t, configDir, sourceDir)
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+	env := []string{"SKILLHUB_CONFIG_DIR=" + configDir, "HOME=" + homeDir}
+
+	output, err := runCLIForTest(
+		t, env, "skills", "install", "rules-selector",
+		"--target", "antigravity", "--scope", "project", "--project", projectDir)
+	if err != nil {
+		t.Fatalf("antigravity project install failed: %v\n%s", err, output)
+	}
+
+	installedDir := filepath.Join(projectDir, ".agents", "skills", "rules-selector")
+	if _, err := os.Stat(filepath.Join(installedDir, "SKILL.md")); err != nil {
+		t.Fatalf("expected antigravity project skill content to install: %v", err)
+	}
+	registry, err := os.ReadFile(filepath.Join(configDir, "installed.tsv"))
+	if err != nil {
+		t.Fatalf("read installed registry: %v", err)
+	}
+	if !strings.Contains(string(registry), "local\trules-selector\tantigravity\tproject\t"+projectDir) {
+		t.Fatalf("expected central installed registry antigravity project row, got:\n%s", registry)
+	}
+
+	output, err = runCLIForTest(t, env, testCommandTargets, "detect", testFlagTSV, "--project", projectDir)
+	if err != nil {
+		t.Fatalf("targets detect failed: %v\n%s", err, output)
+	}
+	want := "antigravity\tproject\tsupported\t" + filepath.Join(projectDir, ".agents", "skills") + "\tyes\t1\t1"
+	if !strings.Contains(output, want) {
+		t.Fatalf("expected antigravity project detection row %q, got:\n%s", want, output)
 	}
 }
 

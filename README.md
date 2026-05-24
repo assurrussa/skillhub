@@ -14,6 +14,10 @@ Requirements: Go and Git.
 curl -fsSL https://raw.githubusercontent.com/assurrussa/skillhub/main/install.sh | sh
 ```
 
+The installed `skillhub` command is a standalone Go binary. It embeds the
+default source presets and target registry, so normal commands and the TUI do
+not need `SKILLHUB_REPO` or a live checkout at runtime.
+
 From a checkout:
 
 ```sh
@@ -119,6 +123,8 @@ Supported install targets:
 - `claude --scope project`: `<project>/.claude/skills`
 - `gemini --scope global`: `~/.gemini/skills`
 - `gemini --scope project`: `<project>/.gemini/skills`
+- `antigravity --scope global`: `~/.gemini/antigravity/skills`
+- `antigravity --scope project`: `<project>/.agents/skills`
 - `opencode --scope global`: `~/.config/opencode/skills`, or
   `$OPENCODE_CONFIG_DIR/skills`
 - `opencode --scope project`: `<project>/.opencode/skills`

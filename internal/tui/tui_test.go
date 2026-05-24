@@ -21,74 +21,76 @@ import (
 var ansiRE = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
 const (
-	testSkillGoProjectRules  = "go-project-rules"
-	testSkillRulesSelector   = "rules-selector"
-	testSkillDocsProject     = "docs-project-rules"
-	testSkillManual          = "manual-skill"
-	testSkillActon           = "acton"
-	testSkillGrillMe         = "productivity_grill-me"
-	testSourceAgentRules     = "agent-rules"
-	testSourceMattPocock     = "mattpocock"
-	testSourceActon          = "acton"
-	testSourceAlpha          = "alpha"
-	testSourceBeta           = "beta"
-	testProjectPath          = "/tmp/project"
-	testProjectA             = "/tmp/project-a"
-	testProjectB             = "/tmp/project-b"
-	testProjectTongoldy      = "/tmp/tongoldy"
-	testProjectSkillsRoot    = "/tmp/project/.agents/skills"
-	testSkillsRoot           = "/tmp/skills"
-	testTimestampInstalled   = "2026-05-05T00:00:00Z"
-	testTimestampUsage       = "2026-05-05T01:00:00Z"
-	testTimestampLatest      = "2026-05-05T03:00:00Z"
-	testDescGoProjectRules   = "Go project rules"
-	testDescGoRules          = "Go rules"
-	testDescGrillMe          = "Grill me"
-	testDocsCategory         = "documentation"
-	testDocsTrigger          = "docs"
-	testQualifiedGoRules     = "agent-rules/go-project-rules"
-	testQualifiedRules       = "agent-rules/rules-selector"
-	testQualifiedGrillMe     = "mattpocock/productivity_grill-me"
-	testGoRulesPath          = "/tmp/skills/go-project-rules"
-	testManualSkillPath      = "/tmp/project/.claude/skills/manual-skill"
-	testProjectBGeminiPath   = "/tmp/project-b/.gemini/skills/rules-selector"
-	testGrillMeClaudePath    = "/home/me/.claude/skills/productivity_grill-me"
-	testLabelCodexGlobal     = "Codex global"
-	testLabelClaudeGlobal    = "Claude global"
-	testFlagTarget           = "--target"
-	testCommandAdd           = "add"
-	testCodexProjectKey      = "codex:project"
-	testCodexGlobalKey       = "codex:global"
-	testClaudeGlobalKey      = "claude:global"
-	testCodexSkillsDesc      = "Codex skills"
-	testClaudeSkillsDesc     = "Claude skills"
-	testTargetOpenCode       = "opencode"
-	testLabelCursor          = "Cursor"
-	testAdapterSkillDir      = "skill-dir"
-	testStatusSupported      = "supported"
-	testStatusPlanned        = "planned"
-	testDescPlanned          = "Planned"
-	testBulletGo             = "• go"
-	testHashABC              = "abc"
-	testProjectRulesPath     = "/tmp/project/.agents/skills/rules-selector"
-	testGlobalRulesPath      = "/tmp/global/rules-selector"
-	testRecordedProject      = "/tmp/recorded-project"
-	testLegacyRulesPath      = "/tmp/legacy-skills/rules-selector"
-	testSourceURL            = "https://github.com/mattpocock/skills"
-	testTriggerGrill         = "grill"
-	testTriggerGoGolang      = "go,golang"
-	testCategoryProductivity = "productivity"
-	testSourceTypeGit        = "git"
-	testSourceRefMain        = "main"
-	testCatalogSkillsPath    = "catalog/skills.tsv"
-	testQueueStateRunning    = "running"
-	testQueueStatePending    = "pending"
-	testPermissionDeniedLine = "permission denied\n"
-	testTargetCursor         = "cursor"
-	testLabelOpenCode        = "OpenCode"
-	testGeminiSkillsDesc     = "Gemini skills"
-	testOpenCodeSkillsDesc   = "OpenCode skills"
-	commandUpdate            = "update"
+	testSkillGoProjectRules   = "go-project-rules"
+	testSkillRulesSelector    = "rules-selector"
+	testSkillDocsProject      = "docs-project-rules"
+	testSkillManual           = "manual-skill"
+	testSkillActon            = "acton"
+	testSkillGrillMe          = "productivity_grill-me"
+	testSourceAgentRules      = "agent-rules"
+	testSourceMattPocock      = "mattpocock"
+	testSourceActon           = "acton"
+	testSourceAlpha           = "alpha"
+	testSourceBeta            = "beta"
+	testProjectPath           = "/tmp/project"
+	testProjectA              = "/tmp/project-a"
+	testProjectB              = "/tmp/project-b"
+	testProjectTongoldy       = "/tmp/tongoldy"
+	testProjectSkillsRoot     = "/tmp/project/.agents/skills"
+	testSkillsRoot            = "/tmp/skills"
+	testTimestampInstalled    = "2026-05-05T00:00:00Z"
+	testTimestampUsage        = "2026-05-05T01:00:00Z"
+	testTimestampLatest       = "2026-05-05T03:00:00Z"
+	testDescGoProjectRules    = "Go project rules"
+	testDescGoRules           = "Go rules"
+	testDescGrillMe           = "Grill me"
+	testDocsCategory          = "documentation"
+	testDocsTrigger           = "docs"
+	testQualifiedGoRules      = "agent-rules/go-project-rules"
+	testQualifiedRules        = "agent-rules/rules-selector"
+	testQualifiedGrillMe      = "mattpocock/productivity_grill-me"
+	testGoRulesPath           = "/tmp/skills/go-project-rules"
+	testManualSkillPath       = "/tmp/project/.claude/skills/manual-skill"
+	testProjectBGeminiPath    = "/tmp/project-b/.gemini/skills/rules-selector"
+	testGrillMeClaudePath     = "/home/me/.claude/skills/productivity_grill-me"
+	testLabelCodexGlobal      = "Codex global"
+	testLabelClaudeGlobal     = "Claude global"
+	testFlagTarget            = "--target"
+	testCommandAdd            = "add"
+	testCodexProjectKey       = "codex:project"
+	testCodexGlobalKey        = "codex:global"
+	testClaudeGlobalKey       = "claude:global"
+	testCodexSkillsDesc       = "Codex skills"
+	testClaudeSkillsDesc      = "Claude skills"
+	testTargetOpenCode        = "opencode"
+	testAntigravityProjectKey = "antigravity:project"
+	testLabelCursor           = "Cursor"
+	testAdapterSkillDir       = "skill-dir"
+	testStatusSupported       = "supported"
+	testStatusPlanned         = "planned"
+	testDescPlanned           = "Planned"
+	testBulletGo              = "• go"
+	testHashABC               = "abc"
+	testProjectRulesPath      = "/tmp/project/.agents/skills/rules-selector"
+	testGlobalRulesPath       = "/tmp/global/rules-selector"
+	testRecordedProject       = "/tmp/recorded-project"
+	testLegacyRulesPath       = "/tmp/legacy-skills/rules-selector"
+	testSourceURL             = "https://github.com/mattpocock/skills"
+	testTriggerGrill          = "grill"
+	testTriggerGoGolang       = "go,golang"
+	testCategoryProductivity  = "productivity"
+	testSourceTypeGit         = "git"
+	testSourceRefMain         = "main"
+	testCatalogSkillsPath     = "catalog/skills.tsv"
+	testQueueStateRunning     = "running"
+	testQueueStatePending     = "pending"
+	testPermissionDeniedLine  = "permission denied\n"
+	testTargetCursor          = "cursor"
+	testLabelOpenCode         = "OpenCode"
+	testAntigravitySkillsDesc = "Antigravity skills"
+	testGeminiSkillsDesc      = "Gemini skills"
+	testOpenCodeSkillsDesc    = "OpenCode skills"
+	commandUpdate             = "update"
 )
 
 func stripANSI(value string) string {
@@ -1945,6 +1947,7 @@ func TestInstallWizardTargetsSupportedAgentsAndDetectedDefaults(t *testing.T) {
 		testSupportedTarget(tui.TargetCodex, tui.LabelCodex, testCodexSkillsDesc),
 		testSupportedTarget(tui.TargetClaude, tui.LabelClaude, testClaudeSkillsDesc),
 		testSupportedTarget(tui.TargetGemini, tui.LabelGemini, testGeminiSkillsDesc),
+		testSupportedTarget(tui.TargetAntigravity, tui.LabelAntigravity, testAntigravitySkillsDesc),
 		testSupportedTarget(testTargetOpenCode, testLabelOpenCode, testOpenCodeSkillsDesc),
 		testPlannedTarget(testTargetCursor, testLabelCursor),
 	}, Detections: []tui.TargetDetection{
@@ -1956,12 +1959,19 @@ func TestInstallWizardTargetsSupportedAgentsAndDetectedDefaults(t *testing.T) {
 			Target: tui.TargetGemini, Scope: tui.ScopeProject, Status: tui.TargetStatusSupported,
 			Path: "/tmp/project/.gemini/skills", Exists: tui.ManagedYes, Skills: "1", Managed: "0",
 		},
+		{
+			Target: tui.TargetAntigravity, Scope: tui.ScopeProject, Status: tui.TargetStatusSupported,
+			Path: testProjectSkillsRoot, Exists: tui.ManagedYes, Skills: "1", Managed: "1",
+		},
 	}})
 	m = asModel(t, updated)
 	if m.ViewMode != tui.ViewTargets {
 		t.Fatalf("expected agent target step, got %q", m.ViewMode)
 	}
-	if m.SelectedTargets[testCodexProjectKey] || !m.SelectedTargets["claude:project"] || !m.SelectedTargets["gemini:project"] {
+	if m.SelectedTargets[testCodexProjectKey] ||
+		!m.SelectedTargets["claude:project"] ||
+		!m.SelectedTargets["gemini:project"] ||
+		!m.SelectedTargets[testAntigravityProjectKey] {
 		t.Fatalf("expected detected project targets only, got %#v", m.SelectedTargets)
 	}
 
@@ -1971,6 +1981,7 @@ func TestInstallWizardTargetsSupportedAgentsAndDetectedDefaults(t *testing.T) {
 		"[ ] Codex",
 		"[✓] Claude",
 		"[✓] Gemini",
+		"[✓] Antigravity",
 		"[ ] OpenCode",
 		"scope: project",
 	} {
@@ -2425,6 +2436,7 @@ func TestTargetChoicesShowSupportedBeforePlanned(t *testing.T) {
 	choices := m.BuildTargetChoices([]tui.Target{
 		testPlannedTarget(testTargetCursor, testLabelCursor),
 		testSupportedTarget(tui.TargetGemini, tui.LabelGemini, testGeminiSkillsDesc),
+		testSupportedTarget(tui.TargetAntigravity, tui.LabelAntigravity, testAntigravitySkillsDesc),
 		{ID: "copilot", Label: "Copilot", Status: testStatusPlanned, Adapter: testStatusPlanned, Description: testDescPlanned},
 		testSupportedTarget(tui.TargetCodex, tui.LabelCodex, testCodexSkillsDesc),
 	})
@@ -2433,7 +2445,14 @@ func TestTargetChoicesShowSupportedBeforePlanned(t *testing.T) {
 	for _, choice := range choices {
 		got = append(got, choice.Key)
 	}
-	wantPrefix := []string{"gemini:global", "gemini:project", testCodexGlobalKey, testCodexProjectKey}
+	wantPrefix := []string{
+		"gemini:global",
+		"gemini:project",
+		"antigravity:global",
+		testAntigravityProjectKey,
+		testCodexGlobalKey,
+		testCodexProjectKey,
+	}
 	if strings.Join(got[:len(wantPrefix)], " ") != strings.Join(wantPrefix, " ") {
 		t.Fatalf("expected supported choices first, got %#v", got)
 	}

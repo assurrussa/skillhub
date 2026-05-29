@@ -495,7 +495,7 @@ func normalizeSourceLocationInput(input string) string {
 }
 
 func normalizeSourceNameInput(input string) string {
-	return normalizeBracketedInput(input)
+	return strings.ToLower(normalizeBracketedInput(input))
 }
 
 func sourceAddArgs(locationInput, nameInput string) []string {

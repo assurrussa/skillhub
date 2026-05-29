@@ -89,15 +89,23 @@ Supported source layouts:
 
 - native `catalog/skills.tsv` plus `skills/<name>/SKILL.md`
 - nested `skills/**/SKILL.md`, materialized as path-prefixed names
-- root-level `<name>/SKILL.md`
+- Codex plugin-bundle `plugins/<plugin>/skills/**/SKILL.md`, materialized as
+  plugin-prefixed names
+- root-level `SKILL.md` or `<name>/SKILL.md`
 
 Examples:
 
 ```sh
 skillhub sources add https://github.com/mattpocock/skills --name mattpocock
+skillhub sources defaults add stitch-skills
 skillhub sources add ../agent-rules --name local-agent-rules
 skillhub install mattpocock/engineering_tdd --target codex --scope global
+skillhub install stitch-skills/stitch-design_generate-design --target codex --scope global
 ```
+
+Skillhub installs individual skill directories from plugin-bundle sources. It
+does not install or manage Codex plugins or plugin marketplace entries.
+Source names are case-insensitive on input and stored as lower-case IDs.
 
 GitHub tree URLs are normalized to repo URL plus ref:
 

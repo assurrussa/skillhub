@@ -131,7 +131,7 @@ func (b *Backend) findInstallMatch(wanted string, sources []Source, warnings *wa
 	wantedSkill := wanted
 	if strings.Contains(wanted, "/") {
 		parts := strings.SplitN(wanted, "/", 2)
-		wantedSource = parts[0]
+		wantedSource = normalizeSourceName(parts[0])
 		wantedSkill = parts[1]
 		if !isValidID(wantedSource) {
 			return catalogMatch{}, fmt.Errorf("invalid source name in qualified skill: %s", wanted)

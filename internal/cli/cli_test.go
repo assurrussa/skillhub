@@ -769,12 +769,73 @@ func writeRootSkill(t *testing.T, sourceDir, name, description, body string) {
 	}
 }
 
+func writeSingleRootSkill(t *testing.T, sourceDir, name, description, body string) {
+	t.Helper()
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatalf("mkdir root skill source: %v", err)
+	}
+	content := "--- name: " + name + " description: " + description + " ---\n\n# " + name + "\n\n" + body + "\n"
+	if err := os.WriteFile(filepath.Join(sourceDir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write source root SKILL.md: %v", err)
+	}
+}
+
+func writePluginSkill(t *testing.T, sourceDir, plugin, skill, frontmatterName, description, body string) {
+	t.Helper()
+	pluginDir := filepath.Join(sourceDir, "plugins", plugin)
+	if err := os.MkdirAll(filepath.Join(pluginDir, ".codex-plugin"), 0o755); err != nil {
+		t.Fatalf("mkdir plugin metadata: %v", err)
+	}
+	pluginJSON := `{"name":"` + plugin + `","version":"1.0.0","skills":"./skills/"}`
+	if err := os.WriteFile(filepath.Join(pluginDir, ".codex-plugin", "plugin.json"), []byte(pluginJSON), 0o644); err != nil {
+		t.Fatalf("write plugin metadata: %v", err)
+	}
+	skillDir := filepath.Join(pluginDir, "skills", filepath.FromSlash(skill))
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("mkdir plugin skill: %v", err)
+	}
+	content := "---\nname: " + frontmatterName + "\ndescription: >-\n  " +
+		strings.ReplaceAll(description, "\n", "\n  ") +
+		"\nallowed-tools:\n  - Bash\n---\n\n# " + skill + "\n\n" + body + "\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write plugin skill: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "notes.md"), []byte("notes for "+plugin+"/"+skill+"\n"), 0o644); err != nil {
+		t.Fatalf("write plugin skill notes: %v", err)
+	}
+}
+
 func initRootGitSource(t *testing.T, dir string) {
 	t.Helper()
 	writeRootSkill(t, dir, "tdd", "Test-driven development with red-green-refactor loop", "TDD root")
 	runGit(t, dir, "init")
 	runGit(t, dir, "checkout", "-b", "main")
 	commitGitSource(t, dir, "initial root skills")
+}
+
+func initPluginBundleGitSource(t *testing.T, dir string) {
+	t.Helper()
+	writePluginSkill(
+		t,
+		dir,
+		"stitch-design",
+		"generate-design",
+		"stitch::generate-design",
+		"Generate new screens from text prompts or images\nwith design system tokens.",
+		"Generate design body",
+	)
+	writePluginSkill(
+		t,
+		dir,
+		"stitch-build",
+		"react-components",
+		"react:components",
+		"Converts Stitch designs into modular Vite and React components.",
+		"React components body",
+	)
+	runGit(t, dir, "init")
+	runGit(t, dir, "checkout", "-b", "main")
+	commitGitSource(t, dir, "initial plugin bundle skills")
 }
 
 func TestSkillsListUsesFreshCachedGitCatalogWithoutSync(t *testing.T) {
@@ -1565,6 +1626,154 @@ func TestRootSkillDirectoriesCanBeAddedAndListed(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "rooted\ttdd\ttdd\ttdd\tTest-driven development with red-green-refactor loop") {
 		t.Fatalf("expected generated root tdd row, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+}
+
+func TestRootSkillFileSourceNormalizesSourceNameAndInstalls(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	sourceDir := filepath.Join(tmp, "Uncodixfy")
+	targetDir := filepath.Join(tmp, "target")
+	writeSingleRootSkill(
+		t,
+		sourceDir,
+		"uncodixfy",
+		"Prevents generic AI UI patterns. Use http://example.test and note: keep text.",
+		"Uncodixfy body",
+	)
+	runGit(t, sourceDir, "init")
+	runGit(t, sourceDir, "checkout", "-b", "main")
+	commitGitSource(t, sourceDir, "initial root skill file")
+
+	stdout, stderr, err := runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "sources", "add", sourceDir, "--name", "Uncodixfy", "--type", "git", "--ref", "main")
+	if err != nil {
+		t.Fatalf("sources add root skill file failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Added source uncodixfy") {
+		t.Fatalf("expected normalized source add output, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+
+	stdout, stderr, err = runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "sources", "list", "--tsv")
+	if err != nil {
+		t.Fatalf("sources list root skill file failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "uncodixfy\tgit\t"+sourceDir+"\tmain\tcatalog/skills.tsv") {
+		t.Fatalf("expected lower-case source in user config, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+
+	stdout, stderr, err = runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "sources", "sync", "Uncodixfy")
+	if err != nil {
+		t.Fatalf("sources sync should accept mixed-case source: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Synced uncodixfy") {
+		t.Fatalf("expected normalized sync output, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+
+	stdout, stderr, err = runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "skills", "list", "--tsv")
+	if err != nil {
+		t.Fatalf("skills list root skill file failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "uncodixfy\tuncodixfy\tuncodixfy\tuncodixfy\tPrevents generic AI UI patterns. Use http://example.test and note: keep text.") {
+		t.Fatalf("expected root SKILL.md generated row, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+
+	stdout, stderr, err = runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "skills", "install", "Uncodixfy/uncodixfy", "--target", "directory", "--dir", targetDir)
+	if err != nil {
+		t.Fatalf("install should accept mixed-case source qualifier: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(targetDir, "uncodixfy", "SKILL.md")); err != nil {
+		t.Fatalf("expected installed root skill file: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(targetDir, "uncodixfy", ".git")); !os.IsNotExist(err) {
+		t.Fatalf("root skill install should not copy source git metadata, stat err=%v", err)
+	}
+}
+
+func TestPluginBundleSourceCanBeAddedListedSearchedAndInstalled(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	sourceDir := filepath.Join(tmp, "plugin-bundle-source")
+	targetDir := filepath.Join(tmp, "target")
+	initPluginBundleGitSource(t, sourceDir)
+
+	stdout, stderr, err := runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "sources", "add", sourceDir, "--name", "stitch-skills", "--type", "git", "--ref", "main")
+	if err != nil {
+		t.Fatalf("sources add plugin bundle failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Added source stitch-skills") {
+		t.Fatalf("expected add output, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+
+	stdout, stderr, err = runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "skills", "list", "--tsv")
+	if err != nil {
+		t.Fatalf("skills list plugin bundle failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	for _, want := range []string{
+		"stitch-skills\tstitch-design_generate-design\tstitch-design\tstitch-design,generate-design,stitch::generate-design\tGenerate new screens from text prompts or images with design system tokens.",
+		"stitch-skills\tstitch-build_react-components\tstitch-build\tstitch-build,react-components,react:components\tConverts Stitch designs into modular Vite and React components.",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("expected plugin bundle generated row %q, got stdout:\n%s\nstderr:\n%s", want, stdout, stderr)
+		}
+	}
+
+	stdout, stderr, err = runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "skills", "search", "--tsv", "stitch::generate-design")
+	if err != nil {
+		t.Fatalf("skills search plugin bundle failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "stitch-skills\tstitch-design_generate-design\t") {
+		t.Fatalf("expected search to find raw namespaced skill, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+
+	stdout, stderr, err = runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "skills", "install", "stitch-skills/stitch-design_generate-design", "--target", "directory", "--dir", targetDir)
+	if err != nil {
+		t.Fatalf("install plugin bundle skill failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	installedDir := filepath.Join(targetDir, "stitch-design_generate-design")
+	for _, path := range []string{
+		filepath.Join(installedDir, "SKILL.md"),
+		filepath.Join(installedDir, "notes.md"),
+		filepath.Join(installedDir, ".skillhub.json"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected installed plugin bundle skill file %s: %v", path, err)
+		}
+	}
+	content, err := os.ReadFile(filepath.Join(installedDir, "SKILL.md"))
+	if err != nil {
+		t.Fatalf("read installed plugin bundle skill: %v", err)
+	}
+	if !strings.Contains(string(content), "name: stitch::generate-design") {
+		t.Fatalf("expected raw frontmatter name to be preserved, got:\n%s", content)
 	}
 }
 

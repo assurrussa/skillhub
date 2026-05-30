@@ -1,3 +1,4 @@
 name	type	location	ref	catalog
 agent-rules	git	https://github.com/assurrussa/agent-rules.git	main	catalog/skills.tsv
 mattpocock	git	https://github.com/mattpocock/skills	main	catalog/skills.tsv
+stitch-skills	git	https://github.com/google-labs-code/stitch-skills	main	catalog/skills.tsv

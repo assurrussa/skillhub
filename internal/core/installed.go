@@ -53,6 +53,7 @@ var installedUsageTable = Table[InstalledSkill]{
 }
 
 func (b *Backend) ReadUsage(filter string) ([]InstalledSkill, error) {
+	filter = normalizeQualifiedSkillSource(filter)
 	file, err := b.InstalledRegistryFile()
 	if err != nil {
 		return nil, err
@@ -75,6 +76,17 @@ func (b *Backend) ReadUsage(filter string) ([]InstalledSkill, error) {
 		out = append(out, row)
 	}
 	return out, nil
+}
+
+func normalizeQualifiedSkillSource(value string) string {
+	if !strings.Contains(value, "/") {
+		return value
+	}
+	source, skill, ok := strings.Cut(value, "/")
+	if !ok {
+		return value
+	}
+	return normalizeSourceName(source) + "/" + skill
 }
 
 func (b *Backend) ensureInstalledRegistry() (string, error) {
@@ -574,7 +586,7 @@ func (b *Backend) updateManagedSkill(req managedSkillUpdate) (status, output str
 	target := req.target
 	scope := req.scope
 	projectPath := req.projectPath
-	sourceName := req.sourceName
+	sourceName := normalizeSourceName(req.sourceName)
 	skillName := req.skillName
 	installedAt := req.installedAt
 	verbose := req.verbose

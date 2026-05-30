@@ -187,7 +187,9 @@ func isLocalSourceOverride(source Source, override string) bool {
 
 func validateSources(rows []Source) ([]Source, error) {
 	seen := map[string]bool{}
+	normalized := make([]Source, 0, len(rows))
 	for _, source := range rows {
+		source.Name = normalizeSourceName(source.Name)
 		if !isValidID(source.Name) {
 			return nil, fmt.Errorf("invalid source name: %s", source.Name)
 		}
@@ -201,8 +203,9 @@ func validateSources(rows []Source) ([]Source, error) {
 			return nil, fmt.Errorf("duplicate source: %s", source.Name)
 		}
 		seen[source.Name] = true
+		normalized = append(normalized, source)
 	}
-	return rows, nil
+	return normalized, nil
 }
 
 func (b *Backend) AddSource(opts SourceAddOptions) (string, error) {
@@ -286,14 +289,18 @@ func (b *Backend) resolveSourceType(optionType, pathLocation string) string {
 }
 
 func sourceNameFromOptions(optionName, sourceType, pathLocation, rawLocation string) string {
-	name := strings.TrimSpace(optionName)
+	name := normalizeSourceName(optionName)
 	if name != "" {
 		return name
 	}
 	if sourceType == SourceTypePath {
-		return deriveSourceName(pathLocation)
+		return normalizeSourceName(deriveSourceName(pathLocation))
 	}
-	return deriveSourceName(rawLocation)
+	return normalizeSourceName(deriveSourceName(rawLocation))
+}
+
+func normalizeSourceName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
 }
 
 func (b *Backend) finalizeSourceLocation(
@@ -338,6 +345,7 @@ func (b *Backend) finalizePathSource(
 }
 
 func (b *Backend) AddDefaultSource(name string) (string, error) {
+	name = normalizeSourceName(name)
 	defaults, err := b.ListDefaultSources()
 	if err != nil {
 		return "", err
@@ -375,6 +383,7 @@ func (b *Backend) AddDefaultSource(name string) (string, error) {
 }
 
 func (b *Backend) RemoveSource(name string) (string, error) {
+	name = normalizeSourceName(name)
 	if !isValidID(name) {
 		return "", fmt.Errorf("invalid source name: %s", name)
 	}
@@ -408,6 +417,7 @@ func (b *Backend) RemoveSource(name string) (string, error) {
 }
 
 func (b *Backend) SyncSources(name string) (string, error) {
+	name = normalizeSourceName(name)
 	sources, err := b.ListSources()
 	if err != nil {
 		return "", err
@@ -765,9 +775,11 @@ func (b *Backend) materializeSource(sourceName, sourcePath, sourceCatalog string
 
 func missingSourceCatalogError(sourceName, sourcePath, sourceCatalog string) error {
 	return fmt.Errorf(
-		"source %s is missing catalog: %s and has no discoverable skills under %s/skills or %s/*/SKILL.md",
+		"source %s is missing catalog: %s and has no discoverable skills under %s/SKILL.md, %s/skills, %s/plugins/*/skills, or %s/*/SKILL.md",
 		sourceName,
 		filepath.Join(sourcePath, sourceCatalog),
+		sourcePath,
+		sourcePath,
 		sourcePath,
 		sourcePath,
 	)
@@ -798,7 +810,11 @@ func generatedCatalogRow(
 ) (CatalogRow, bool, error) {
 	skillDir := filepath.Dir(skillFile)
 	rel := generatedSkillRelativeDir(sourcePath, skillDir)
-	if rel == "." || hasHiddenPathSegment(rel) {
+	rootSkill := rel == "."
+	if rootSkill {
+		rel = rootGeneratedSkillName(sourceName, skillFile)
+	}
+	if hasHiddenPathSegment(rel) {
 		return CatalogRow{}, false, nil
 	}
 	flatName := strings.ReplaceAll(rel, "/", "_")
@@ -811,7 +827,7 @@ func generatedCatalogRow(
 		)
 	}
 	seen[flatName] = rel
-	if err := copyDir(skillDir, filepath.Join(tmpPath, "skills", flatName)); err != nil {
+	if err := copyGeneratedSkillDir(skillDir, filepath.Join(tmpPath, "skills", flatName), rootSkill); err != nil {
 		return CatalogRow{}, false, err
 	}
 	return CatalogRow{
@@ -822,7 +838,17 @@ func generatedCatalogRow(
 	}, true, nil
 }
 
+func rootGeneratedSkillName(sourceName, skillFile string) string {
+	if fmName := normalizeSourceName(skillFrontmatterValue(skillFile, "name")); isValidID(fmName) {
+		return fmName
+	}
+	return sourceName
+}
+
 func generatedSkillRelativeDir(sourcePath, skillDir string) string {
+	if rel, ok := pluginSkillRelativeDir(sourcePath, skillDir); ok {
+		return rel
+	}
 	skillsRoot := filepath.Join(sourcePath, "skills")
 	var rel string
 	if strings.HasPrefix(skillDir, skillsRoot+string(os.PathSeparator)) {
@@ -831,6 +857,26 @@ func generatedSkillRelativeDir(sourcePath, skillDir string) string {
 		rel, _ = filepath.Rel(sourcePath, skillDir)
 	}
 	return filepath.ToSlash(rel)
+}
+
+func pluginSkillRelativeDir(sourcePath, skillDir string) (string, bool) {
+	pluginsRoot := filepath.Join(sourcePath, "plugins")
+	if !strings.HasPrefix(skillDir, pluginsRoot+string(os.PathSeparator)) {
+		return "", false
+	}
+	rel, err := filepath.Rel(pluginsRoot, skillDir)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return "", false
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) < 3 || parts[0] == "" || parts[1] != "skills" {
+		return "", false
+	}
+	skillRel := strings.Join(parts[2:], "/")
+	if skillRel == "" {
+		return "", false
+	}
+	return parts[0] + "/" + skillRel, true
 }
 
 func generatedSkillCategory(rel string) string {
@@ -877,6 +923,10 @@ func (b *Backend) sourceHasDiscoverableSkills(sourcePath string) bool {
 
 func discoverSkillFiles(sourcePath string) ([]string, error) {
 	files := []string{}
+	rootSkill := filepath.Join(sourcePath, "SKILL.md")
+	if info, err := os.Stat(rootSkill); err == nil && !info.IsDir() {
+		files = append(files, rootSkill)
+	}
 	skillsRoot := filepath.Join(sourcePath, "skills")
 	if info, err := os.Stat(skillsRoot); err == nil && info.IsDir() {
 		if err := filepath.WalkDir(skillsRoot, func(path string, d os.DirEntry, err error) error {
@@ -887,6 +937,26 @@ func discoverSkillFiles(sourcePath string) ([]string, error) {
 				return nil
 			}
 			if d.Name() == "SKILL.md" {
+				files = append(files, path)
+			}
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+	}
+	pluginsRoot := filepath.Join(sourcePath, "plugins")
+	if info, err := os.Stat(pluginsRoot); err == nil && info.IsDir() {
+		if err := filepath.WalkDir(pluginsRoot, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			if d.Name() != "SKILL.md" {
+				return nil
+			}
+			if _, ok := pluginSkillRelativeDir(sourcePath, filepath.Dir(path)); ok {
 				files = append(files, path)
 			}
 			return nil
@@ -930,29 +1000,132 @@ func skillFrontmatterValue(skillFile, wanted string) string {
 	}
 	first := scanner.Text()
 	if strings.HasPrefix(first, "--- ") {
-		key := wanted + ":"
-		if idx := strings.Index(first, key); idx >= 0 {
-			value := strings.TrimSpace(first[idx+len(key):])
-			if end := strings.LastIndex(value, "---"); end >= 0 {
-				value = strings.TrimSpace(value[:end])
-			}
-			return value
-		}
+		return inlineFrontmatterValue(first, wanted)
 	}
 	if first != "---" {
 		return ""
 	}
-	prefix := wanted + ":"
+	lines := []string{}
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "---" {
-			return ""
+			return frontmatterValue(lines, wanted)
 		}
-		if strings.HasPrefix(line, prefix) {
-			return strings.TrimSpace(strings.TrimPrefix(line, prefix))
-		}
+		lines = append(lines, line)
 	}
 	return ""
+}
+
+func inlineFrontmatterValue(line, wanted string) string {
+	inline := strings.TrimSpace(strings.TrimPrefix(line, "---"))
+	if end := strings.LastIndex(inline, "---"); end >= 0 {
+		inline = strings.TrimSpace(inline[:end])
+	}
+	key := wanted + ":"
+	idx := strings.Index(inline, key)
+	if idx < 0 {
+		return ""
+	}
+	value := strings.TrimSpace(inline[idx+len(key):])
+	if end := indexNextInlineFrontmatterKey(value); end >= 0 {
+		value = strings.TrimSpace(value[:end])
+	}
+	return trimFrontmatterScalar(value)
+}
+
+func indexNextInlineFrontmatterKey(value string) int {
+	for i := 1; i < len(value); i++ {
+		if value[i-1] != ' ' {
+			continue
+		}
+		j := i
+		for j < len(value) && isFrontmatterKeyByte(value[j]) {
+			j++
+		}
+		if j > i && j < len(value) && value[j] == ':' && isKnownInlineFrontmatterKey(value[i:j]) {
+			return i - 1
+		}
+	}
+	return -1
+}
+
+func isKnownInlineFrontmatterKey(key string) bool {
+	switch key {
+	case "name", "description", "allowed-tools", "tools", "category", "triggers", "version", "author":
+		return true
+	default:
+		return false
+	}
+}
+
+func isFrontmatterKeyByte(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_' || b == '-'
+}
+
+func frontmatterValue(lines []string, wanted string) string {
+	prefix := wanted + ":"
+	for i, line := range lines {
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		value := strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		if isFrontmatterBlockScalar(value) {
+			return foldedFrontmatterBlock(lines[i+1:])
+		}
+		return trimFrontmatterScalar(value)
+	}
+	return ""
+}
+
+func isFrontmatterBlockScalar(value string) bool {
+	switch value {
+	case ">", ">-", ">+", "|", "|-", "|+":
+		return true
+	default:
+		return false
+	}
+}
+
+func foldedFrontmatterBlock(lines []string) string {
+	parts := []string{}
+	for _, line := range lines {
+		if isTopLevelFrontmatterKey(line) {
+			break
+		}
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		parts = append(parts, trimmed)
+	}
+	return strings.Join(strings.Fields(strings.Join(parts, " ")), " ")
+}
+
+func isTopLevelFrontmatterKey(line string) bool {
+	if line == "" || strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
+		return false
+	}
+	idx := strings.Index(line, ":")
+	if idx <= 0 {
+		return false
+	}
+	for _, r := range line[:idx] {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func trimFrontmatterScalar(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) >= 2 {
+		if (value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'') {
+			return value[1 : len(value)-1]
+		}
+	}
+	return value
 }
 
 func commaListContains(list, item string) bool {
@@ -971,6 +1144,15 @@ func hasHiddenPathSegment(rel string) bool {
 		}
 	}
 	return false
+}
+
+func copyGeneratedSkillDir(src, dst string, skipGitDir bool) error {
+	if !skipGitDir {
+		return copyDir(src, dst)
+	}
+	return copyDirWithSkip(src, dst, func(rel string, d os.DirEntry) bool {
+		return d.IsDir() && rel == ".git"
+	})
 }
 
 func deriveSourceName(location string) string {
@@ -1024,6 +1206,10 @@ func envSlice(env map[string]string) []string {
 }
 
 func copyDir(src, dst string) error {
+	return copyDirWithSkip(src, dst, nil)
+}
+
+func copyDirWithSkip(src, dst string, skip func(rel string, d os.DirEntry) bool) error {
 	if err := os.RemoveAll(dst); err != nil {
 		return err
 	}
@@ -1034,6 +1220,13 @@ func copyDir(src, dst string) error {
 		rel, err := filepath.Rel(src, path)
 		if err != nil {
 			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if skip != nil && skip(rel, d) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		target := filepath.Join(dst, rel)
 		if d.IsDir() {

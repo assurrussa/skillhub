@@ -1339,6 +1339,12 @@ func TestAddSourceArgsNormalizeBracketedURLAndName(t *testing.T) {
 	if strings.Join(args, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("unexpected angle-bracket add source args: got %#v want %#v", args, want)
 	}
+
+	args = tui.SourceAddArgs("https://github.com/cyxzdev/Uncodixfy/tree/main", "Uncodixfy")
+	want = []string{testCommandAdd, "https://github.com/cyxzdev/Uncodixfy/tree/main", tui.FlagName, "uncodixfy"}
+	if strings.Join(args, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("unexpected mixed-case add source args: got %#v want %#v", args, want)
+	}
 }
 
 func TestAddSourceEmptyFieldsDoNotLookPreFilled(t *testing.T) {

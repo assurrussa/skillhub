@@ -54,7 +54,7 @@ required at runtime, and user-added sources live outside the checkout.
   them.
 - For TUI changes, cover cursor movement, selection state, and rendered output
   with `internal/tui` tests when practical.
-- Use Context7 for current Cobra, Bubble Tea, Lip Gloss, or other library docs
+- Use `$find-docs` for current Cobra, Bubble Tea, Lip Gloss, or other library docs
   when changing APIs or library-specific behavior.
 
 ## Project Initialization
@@ -86,3 +86,26 @@ go run ./cmd/skillhub-dev verify
 go run ./cmd/skillhub-dev smoke-temp
 go run ./cmd/skillhub-dev tui-temp
 ```
+
+## Shared Agent Context
+
+Use `$project-context-router` for cross-project context after local grounding.
+Resolve the shared root through `AGENT_CONTEXT_ROOT` or the skill resolver.
+Local verified docs and code remain the source of truth.
+
+When shared context is needed, follow `streams/AGENTS.md` and its query route.
+Reuse already loaded root rules, PII policy and glossary. Open the known hub
+and only the topic relevant to the task:
+
+- `streams/wiki/platforms/skillhub.md`
+
+For integration work, open only the affected neighbour hub:
+
+- `streams/wiki/platforms/agent-rules.md`
+
+Use `streams/wiki/index.md` only to locate an unknown area or answer an overview
+question. This is a task router, not a mandatory list of wiki pages.
+
+
+If the wiki disagrees with local evidence, report the drift. Update the shared
+page only when documentation upkeep is in scope, after verification.

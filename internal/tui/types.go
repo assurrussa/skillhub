@@ -91,9 +91,11 @@ const (
 	viewTargets          = "targets"
 	viewInstallScope     = "install-scope"
 	viewInstallConfirm   = "install-confirm"
-	viewInstallResult    = "install-result"
-	viewConfirmDelete    = "confirm-delete"
-	viewHelp             = "help"
+	viewInstallResult       = "install-result"
+	viewConfirmDelete       = "confirm-delete"
+	viewConfirmRemoveSource = "confirm-remove-source"
+	viewRenameSource        = "rename-source"
+	viewHelp                = "help"
 )
 
 type InstallResult struct {

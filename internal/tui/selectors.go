@@ -210,6 +210,24 @@ func (m model) currentSource() (SourcePreset, bool) {
 	return m.sources[m.sourceCursor], true
 }
 
+func (m model) countSourceDependencies(sourceName string) int {
+	count := 0
+	for _, row := range m.installedRows {
+		if row.Source == sourceName {
+			count++
+		}
+	}
+	if count > 0 {
+		return count
+	}
+	if backend, err := newBackend(m.repoRoot); err == nil {
+		if deps, err := backend.SourceDependencies(sourceName); err == nil {
+			return len(deps)
+		}
+	}
+	return count
+}
+
 func (m *model) toggleCurrent() {
 	if len(m.filtered) == 0 {
 		return
@@ -320,7 +338,7 @@ func (m model) dashboardSection() string {
 		return viewSkills
 	case viewInstalledDetails:
 		return viewInstalled
-	case viewDefaults, viewAddSource:
+	case viewDefaults, viewAddSource, viewConfirmRemoveSource, viewRenameSource:
 		return viewSources
 	case viewConfirmDelete:
 		return viewInstalled

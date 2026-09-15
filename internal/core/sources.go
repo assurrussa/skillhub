@@ -3,6 +3,7 @@ package core
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -382,8 +383,23 @@ func (b *Backend) AddDefaultSource(name string) (string, error) {
 	return fmt.Sprintf("Added default source %s to %s\n", name, userFile), nil
 }
 
-func (b *Backend) RemoveSource(name string) (string, error) {
+func (b *Backend) SourceDependencies(name string) ([]InstalledSkill, error) {
 	name = normalizeSourceName(name)
+	usage, err := b.ReadUsage("")
+	if err != nil {
+		return nil, err
+	}
+	deps := make([]InstalledSkill, 0)
+	for _, row := range usage {
+		if row.Source == name {
+			deps = append(deps, row)
+		}
+	}
+	return deps, nil
+}
+
+func (b *Backend) RemoveSource(opts SourceRemoveOptions) (string, error) {
+	name := normalizeSourceName(opts.Name)
 	if !isValidID(name) {
 		return "", fmt.Errorf("invalid source name: %s", name)
 	}
@@ -403,6 +419,15 @@ func (b *Backend) RemoveSource(name string) (string, error) {
 	if !found {
 		return "", fmt.Errorf("user source not found: %s", name)
 	}
+	if !opts.Force {
+		deps, err := b.SourceDependencies(name)
+		if err != nil {
+			return "", err
+		}
+		if len(deps) > 0 {
+			return "", fmt.Errorf("cannot remove source %s: %d installed skill(s) depend on it (use --force to remove anyway)", name, len(deps))
+		}
+	}
 	userFile, err := b.UserSourcesFile()
 	if err != nil {
 		return "", err
@@ -414,6 +439,113 @@ func (b *Backend) RemoveSource(name string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("Removed source %s from %s\n", name, userFile), nil
+}
+
+func (b *Backend) RenameSource(opts SourceRenameOptions) (SourceRenameSummary, error) {
+	return b.renameSourceSafely(opts)
+}
+
+func (b *Backend) migrateSourceCache(oldName, newName string) {
+	oldGit, err1 := b.cachedGitSourcePath(oldName)
+	newGit, err2 := b.cachedGitSourcePath(newName)
+	if err1 == nil && err2 == nil {
+		if info, err := os.Stat(oldGit); err == nil && info.IsDir() {
+			_ = os.MkdirAll(filepath.Dir(newGit), 0o755)
+			_ = os.RemoveAll(newGit)
+			_ = os.Rename(oldGit, newGit)
+		}
+	}
+	oldState, err1 := b.sourceSyncStateFile(oldName)
+	newState, err2 := b.sourceSyncStateFile(newName)
+	if err1 == nil && err2 == nil {
+		if _, err := os.Stat(oldState); err == nil {
+			_ = os.MkdirAll(filepath.Dir(newState), 0o755)
+			_ = os.Remove(newState)
+			_ = os.Rename(oldState, newState)
+		}
+	}
+	if oldGen, err := b.generatedSourcePath(oldName); err == nil {
+		_ = os.RemoveAll(oldGen)
+	}
+	if newGen, err := b.generatedSourcePath(newName); err == nil {
+		_ = os.RemoveAll(newGen)
+	}
+}
+
+func (b *Backend) migrateInstalledUsageForSource(oldName, newName string) (int, map[string]bool, error) {
+	file, err := b.InstalledRegistryFile()
+	if err != nil {
+		return 0, nil, err
+	}
+	if _, err := os.Stat(file); os.IsNotExist(err) {
+		return 0, map[string]bool{}, nil
+	}
+	rows, err := installedUsageTable.ReadFile(file)
+	if err != nil {
+		return 0, nil, err
+	}
+	updated := 0
+	affectedProjects := make(map[string]bool)
+	for i := range rows {
+		if rows[i].Source == oldName {
+			rows[i].Source = newName
+			rows[i].QualifiedSkill = newName + "/" + rows[i].Skill
+			updated++
+
+			sidecarPath := filepath.Join(rows[i].InstalledPath, ".skillhub.json")
+			if meta, ok := readMetadata(sidecarPath); ok {
+				meta.Source = newName
+				meta.QualifiedSkill = newName + "/" + meta.Skill
+				if data, err := json.MarshalIndent(meta, "", "  "); err == nil {
+					data = append(data, '\n')
+					_ = os.WriteFile(sidecarPath, data, 0o644)
+				}
+			}
+
+			if rows[i].Scope == ScopeProject && strings.TrimSpace(rows[i].ProjectPath) != "" && rows[i].ProjectPath != "-" {
+				affectedProjects[rows[i].ProjectPath] = true
+			}
+		}
+	}
+	if updated > 0 {
+		if err := installedUsageTable.WriteFile(file, rows); err != nil {
+			return 0, nil, err
+		}
+	}
+	return updated, affectedProjects, nil
+}
+
+func (b *Backend) migrateStandaloneLockfile(projectDir, oldName, newName string) (bool, error) {
+	lockPath := filepath.Join(projectDir, "skills.lock.toml")
+	data, err := os.ReadFile(lockPath)
+	if err != nil {
+		return false, nil
+	}
+	content := string(data)
+	oldSourceLine := fmt.Sprintf("source = %q", oldName)
+	newSourceLine := fmt.Sprintf("source = %q", newName)
+	if !strings.Contains(content, oldSourceLine) {
+		return false, nil
+	}
+	lines := strings.Split(content, "\n")
+	modified := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == oldSourceLine {
+			lines[i] = strings.Replace(line, oldSourceLine, newSourceLine, 1)
+			modified = true
+		} else if strings.HasPrefix(trimmed, "qualified_skill = ") {
+			if strings.Contains(line, "\""+oldName+"/") {
+				lines[i] = strings.Replace(line, "\""+oldName+"/", "\""+newName+"/", 1)
+				modified = true
+			}
+		}
+	}
+	if modified {
+		err := os.WriteFile(lockPath, []byte(strings.Join(lines, "\n")), 0o644)
+		return err == nil, err
+	}
+	return false, nil
 }
 
 func (b *Backend) SyncSources(name string) (string, error) {
@@ -693,7 +825,6 @@ func (b *Backend) cachedGitOriginMatches(source Source, sourcePath string) (bool
 	if err != nil {
 		return false, err
 	}
-	// The cache repo may have its own URL rewrites; those must not validate a mismatched origin.
 	cacheResolvedOrigin, err := b.gitOutput(sourcePath, "remote", "get-url", "origin")
 	if err != nil {
 		return false, err
@@ -743,12 +874,16 @@ func (b *Backend) materializeSource(sourceName, sourcePath, sourceCatalog string
 	if err != nil {
 		return "", err
 	}
-	if !force {
+	if !force && generatedCatalogIsCurrent(generatedPath) {
 		if _, err := os.Stat(filepath.Join(generatedPath, sourceCatalog)); err == nil {
 			return generatedPath, nil
 		}
 	}
-	if !b.sourceHasDiscoverableSkills(sourcePath) {
+	skillFiles, err := discoverSkillFiles(sourcePath)
+	if err != nil {
+		return "", err
+	}
+	if len(skillFiles) == 0 {
 		return "", missingSourceCatalogError(sourceName, sourcePath, sourceCatalog)
 	}
 	tmpPath := fmt.Sprintf("%s.%d", generatedPath, os.Getpid())
@@ -758,11 +893,8 @@ func (b *Backend) materializeSource(sourceName, sourcePath, sourceCatalog string
 	if err := os.MkdirAll(filepath.Join(tmpPath, "catalog"), 0o755); err != nil {
 		return "", err
 	}
+	defer os.RemoveAll(tmpPath)
 	if err := os.MkdirAll(filepath.Join(tmpPath, "skills"), 0o755); err != nil {
-		return "", err
-	}
-	skillFiles, err := discoverSkillFiles(sourcePath)
-	if err != nil {
 		return "", err
 	}
 	sort.Strings(skillFiles)
@@ -786,56 +918,39 @@ func missingSourceCatalogError(sourceName, sourcePath, sourceCatalog string) err
 }
 
 func buildGeneratedCatalogRows(sourceName, sourcePath, tmpPath string, skillFiles []string) ([]CatalogRow, error) {
-	seen := map[string]string{}
-	rows := []CatalogRow{}
-	for _, skillFile := range skillFiles {
-		row, ok, err := generatedCatalogRow(sourceName, sourcePath, tmpPath, skillFile, seen)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			continue
-		}
-		rows = append(rows, row)
-	}
-	return rows, nil
+	return buildPlannedCatalogRows(sourceName, sourcePath, tmpPath, skillFiles)
 }
 
-func generatedCatalogRow(
-	sourceName string,
-	sourcePath string,
-	tmpPath string,
-	skillFile string,
-	seen map[string]string,
-) (CatalogRow, bool, error) {
+func generatedCanonicalSkillNames(sourceName, sourcePath string, skillFiles []string) (map[string]bool, error) {
+	plans, err := planGeneratedSkills(sourceName, sourcePath, skillFiles)
+	if err != nil {
+		return nil, err
+	}
+	names := make(map[string]bool, len(plans))
+	for _, plan := range plans {
+		names[plan.name] = true
+	}
+	return names, nil
+}
+
+func generatedSkillIdentity(sourceName, sourcePath, skillFile string) (flatName, rel string, rootSkill, ok bool, err error) {
 	skillDir := filepath.Dir(skillFile)
-	rel := generatedSkillRelativeDir(sourcePath, skillDir)
-	rootSkill := rel == "."
+	rel = generatedSkillRelativeDir(sourcePath, skillDir)
+	rootSkill = rel == "."
 	if rootSkill {
 		rel = rootGeneratedSkillName(sourceName, skillFile)
 	}
 	if hasHiddenPathSegment(rel) {
-		return CatalogRow{}, false, nil
+		return "", rel, rootSkill, false, nil
 	}
-	flatName := strings.ReplaceAll(rel, "/", "_")
+	flatName, err = generatedSkillFlatName(sourcePath, skillFile, rel)
+	if err != nil {
+		return "", rel, rootSkill, false, err
+	}
 	if !isValidID(flatName) {
-		return CatalogRow{}, false, fmt.Errorf("invalid generated skill name from %s: %s", rel, flatName)
+		return "", rel, rootSkill, false, fmt.Errorf("invalid generated skill name from %s: %s", rel, flatName)
 	}
-	if previous, ok := seen[flatName]; ok {
-		return CatalogRow{}, false, fmt.Errorf(
-			"duplicate generated skill name %s in source %s: %s and %s", flatName, sourceName, previous, rel,
-		)
-	}
-	seen[flatName] = rel
-	if err := copyGeneratedSkillDir(skillDir, filepath.Join(tmpPath, "skills", flatName), rootSkill); err != nil {
-		return CatalogRow{}, false, err
-	}
-	return CatalogRow{
-		Name:        flatName,
-		Category:    generatedSkillCategory(rel),
-		Triggers:    generatedSkillTriggers(skillFile, rel),
-		Description: generatedSkillDescription(skillFile, rel),
-	}, true, nil
+	return flatName, rel, rootSkill, true, nil
 }
 
 func rootGeneratedSkillName(sourceName, skillFile string) string {
@@ -905,6 +1020,9 @@ func generatedSkillDescription(skillFile, rel string) string {
 
 func replaceGeneratedSource(tmpPath, generatedPath, sourceCatalog string, catalogRows []CatalogRow) (string, error) {
 	if err := CatalogTable.WriteFile(filepath.Join(tmpPath, sourceCatalog), catalogRows); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(tmpPath, generatedCatalogVersionFile), []byte(generatedCatalogVersion), 0o644); err != nil {
 		return "", err
 	}
 	if err := os.RemoveAll(generatedPath); err != nil {
@@ -1156,9 +1274,7 @@ func copyGeneratedSkillDir(src, dst string, skipGitDir bool) error {
 }
 
 func deriveSourceName(location string) string {
-	clean := strings.TrimRight(location, "/")
-	base := filepath.Base(clean)
-	return strings.TrimSuffix(base, ".git")
+	return deriveSourceAlias(location)
 }
 
 type githubTreeURL struct {

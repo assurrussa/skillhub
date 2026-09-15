@@ -10,6 +10,8 @@ const (
 	flagTarget  = "--target"
 
 	commandAdd       = "add"
+	commandRemove    = "remove"
+	commandRename    = "rename"
 	commandUninstall = "uninstall"
 	commandUpdate    = "update"
 

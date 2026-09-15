@@ -970,3 +970,161 @@ func TestCoreRecommendRanksProjectSignals(t *testing.T) {
 		t.Fatalf("expected unchanged go recommendation score, got %#v", rows[0])
 	}
 }
+
+func TestCoreRemoveSourceGuardsDependencies(t *testing.T) {
+	tmp := t.TempDir()
+	repo := filepath.Join(tmp, "repo")
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	sourceDir := filepath.Join(tmp, "source")
+	projectDir := filepath.Join(tmp, "project")
+	writeCoreRepo(t, repo)
+	writeCoreCatalog(t, sourceDir, ruleSelector)
+	writeCoreSources(t, configDir, sourceDir)
+
+	backend := coreBackend(t, repo, projectDir, configDir, cacheDir, nil)
+	_, _, err := backend.Install(core.InstallOptions{
+		Names:   []string{ruleSelector},
+		Target:  core.TargetCodex,
+		Scope:   core.ScopeProject,
+		Project: projectDir,
+	})
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	// 1. Guard check without force
+	_, err = backend.RemoveSource(core.SourceRemoveOptions{Name: "local", Force: false})
+	if err == nil {
+		t.Fatalf("expected error when removing source with dependencies without force")
+	}
+	if !strings.Contains(err.Error(), "1 installed skill(s) depend on it") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+
+	// Verify source still exists
+	sources, err := backend.ListSources()
+	if err != nil || len(sources) != 1 {
+		t.Fatalf("source should still exist: %v, sources: %#v", err, sources)
+	}
+
+	// 2. Remove with force
+	out, err := backend.RemoveSource(core.SourceRemoveOptions{Name: "local", Force: true})
+	if err != nil {
+		t.Fatalf("remove with force failed: %v", err)
+	}
+	if !strings.Contains(out, "Removed source local") {
+		t.Fatalf("unexpected output: %s", out)
+	}
+
+	sources, err = backend.ListSources()
+	if err != nil || len(sources) != 0 {
+		t.Fatalf("expected no sources after removal, got: %#v", sources)
+	}
+}
+
+func TestCoreRenameSourceUpdatesDependencies(t *testing.T) {
+	tmp := t.TempDir()
+	repo := filepath.Join(tmp, "repo")
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	sourceDir := filepath.Join(tmp, "source")
+	projectDir := filepath.Join(tmp, "project")
+	writeCoreRepo(t, repo)
+	writeCoreCatalog(t, sourceDir, ruleSelector)
+	writeCoreSources(t, configDir, sourceDir)
+
+	backend := coreBackend(t, repo, projectDir, configDir, cacheDir, nil)
+
+	// Install in project scope
+	_, _, err := backend.Install(core.InstallOptions{
+		Names:   []string{ruleSelector},
+		Target:  core.TargetCodex,
+		Scope:   core.ScopeProject,
+		Project: projectDir,
+	})
+	if err != nil {
+		t.Fatalf("install project: %v", err)
+	}
+
+	// Install in global scope (creates .skillhub.json)
+	globalDir := filepath.Join(tmp, "global")
+	_, _, err = backend.Install(core.InstallOptions{
+		Names:  []string{ruleSelector},
+		Target: core.TargetDirectory,
+		Dir:    globalDir,
+	})
+	if err != nil {
+		t.Fatalf("install global: %v", err)
+	}
+
+	// Error test: invalid new name
+	_, err = backend.RenameSource(core.SourceRenameOptions{OldName: "local", NewName: "bad/name"})
+	if err == nil || !strings.Contains(err.Error(), "invalid new source name") {
+		t.Fatalf("expected invalid name error, got: %v", err)
+	}
+
+	// Error test: same name
+	_, err = backend.RenameSource(core.SourceRenameOptions{OldName: "local", NewName: "local"})
+	if err == nil || !strings.Contains(err.Error(), "must be different") {
+		t.Fatalf("expected same name error, got: %v", err)
+	}
+
+	// Error test: non-existent
+	_, err = backend.RenameSource(core.SourceRenameOptions{OldName: "ghost", NewName: "omega"})
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected not found error, got: %v", err)
+	}
+
+	// Successful rename: local -> omega
+	summary, err := backend.RenameSource(core.SourceRenameOptions{OldName: "local", NewName: "omega"})
+	if err != nil {
+		t.Fatalf("rename failed: %v", err)
+	}
+	if summary.InstalledUpdated != 2 {
+		t.Fatalf("expected 2 installed skills updated, got %d", summary.InstalledUpdated)
+	}
+	if summary.LockfilesUpdated != 1 {
+		t.Fatalf("expected 1 lockfile updated, got %d", summary.LockfilesUpdated)
+	}
+
+	// 1. Verify sources.tsv
+	sources, err := backend.ListSources()
+	if err != nil || len(sources) != 1 || sources[0].Name != "omega" {
+		t.Fatalf("expected source omega, got: %#v", sources)
+	}
+
+	// 2. Verify installed.tsv
+	usage, err := backend.ReadUsage("")
+	if err != nil {
+		t.Fatalf("read usage: %v", err)
+	}
+	for _, row := range usage {
+		if row.Source != "omega" {
+			t.Fatalf("expected usage row source omega, got: %#v", row)
+		}
+		if !strings.HasPrefix(row.QualifiedSkill, "omega/") {
+			t.Fatalf("expected usage row qualified skill omega/..., got: %#v", row)
+		}
+	}
+
+	// 3. Verify .skillhub.json in global install
+	sidecarPath := filepath.Join(globalDir, ruleSelector, ".skillhub.json")
+	data, err := os.ReadFile(sidecarPath)
+	if err != nil {
+		t.Fatalf("read sidecar: %v", err)
+	}
+	if !strings.Contains(string(data), `"source": "omega"`) || !strings.Contains(string(data), `"qualified_skill": "omega/rules-selector"`) {
+		t.Fatalf("sidecar was not updated properly: %s", string(data))
+	}
+
+	// 4. Verify skills.lock.toml in project
+	lockPath := filepath.Join(projectDir, "skills.lock.toml")
+	lockData, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatalf("read lockfile: %v", err)
+	}
+	if !strings.Contains(string(lockData), `source = "omega"`) || !strings.Contains(string(lockData), `qualified_skill = "omega/rules-selector"`) {
+		t.Fatalf("lockfile was not updated properly: %s", string(lockData))
+	}
+}

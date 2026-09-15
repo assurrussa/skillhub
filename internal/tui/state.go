@@ -46,10 +46,15 @@ type model struct {
 	postReloadStatus      string
 	spinnerFrame          int
 
-	projectDir       string
-	install          installFlowState
-	sourceProgress   sourceSyncProgressState
-	pendingUninstall InstalledSkill
+	projectDir              string
+	install                 installFlowState
+	sourceProgress          sourceSyncProgressState
+	pendingUninstall        InstalledSkill
+	pendingRemoveSource     SourcePreset
+	pendingRemoveSourceDeps int
+	pendingRenameSource     SourcePreset
+	pendingRenameSourceDeps int
+	sourceRenameInput       string
 }
 
 type installFlowState struct {

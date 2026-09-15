@@ -42,14 +42,16 @@ func NewRootCommand() *cobra.Command {
 	root.PersistentFlags().StringVar(&repoFlag, "repo", "", "skillhub repository path")
 
 	sources := &cobra.Command{
-		Use:   "sources",
-		Short: "Manage skill sources",
+		Use:     "sources",
+		Aliases: []string{"source"},
+		Short:   "Manage skill sources",
 	}
 	sources.AddCommand(sourceListCommand())
 	sources.AddCommand(sourceStatusCommand())
 	sources.AddCommand(sourceSyncCommand())
 	sources.AddCommand(sourceAddCommand())
 	sources.AddCommand(sourceRemoveCommand())
+	sources.AddCommand(sourceRenameCommand())
 	sources.AddCommand(sourceDefaultsCommand())
 
 	targets := &cobra.Command{
@@ -217,10 +219,12 @@ func sourceAddCommand() *cobra.Command {
 }
 
 func sourceRemoveCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "remove <name>",
-		Short: "Remove a user skill source",
-		Args:  cobra.ExactArgs(1),
+	var force bool
+	cmd := &cobra.Command{
+		Use:     "remove <name>",
+		Aliases: []string{"rm", "delete"},
+		Short:   "Remove a user skill source",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			repoRoot, err := resolveRepoRoot()
 			if err != nil {
@@ -230,8 +234,38 @@ func sourceRemoveCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			output, err := backend.RemoveSource(args[0])
+			output, err := backend.RemoveSource(core.SourceRemoveOptions{
+				Name:  args[0],
+				Force: force,
+			})
 			_, _ = fmt.Fprint(cmd.OutOrStdout(), output)
+			return err
+		},
+	}
+	cmd.Flags().BoolVarP(&force, "force", "f", false, "force removal even if installed skills depend on this source")
+	return cmd
+}
+
+func sourceRenameCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:     "rename <old-name> <new-name>",
+		Aliases: []string{"mv"},
+		Short:   "Rename a skill source and update dependent installed skills and lockfiles",
+		Args:    cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repoRoot, err := resolveRepoRoot()
+			if err != nil {
+				return err
+			}
+			backend, err := core.NewDefault(repoRoot)
+			if err != nil {
+				return err
+			}
+			summary, err := backend.RenameSource(core.SourceRenameOptions{
+				OldName: args[0],
+				NewName: args[1],
+			})
+			_, _ = fmt.Fprint(cmd.OutOrStdout(), summary.Output)
 			return err
 		},
 	}

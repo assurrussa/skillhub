@@ -39,6 +39,9 @@ func (b *Backend) ListSkills(query string) ([]Skill, string, error) {
 		}
 		loadedSources++
 		for _, row := range rows {
+			if b.shouldHideGeneratedSkillCompatibilityRow(source, sourcePath, row) {
+				continue
+			}
 			if !isValidID(row.Name) {
 				return nil, warnings.String(), fmt.Errorf("invalid catalog skill name from %s: %s", source.Name, row.Name)
 			}
@@ -296,6 +299,9 @@ func (b *Backend) allInstallNames(sources []Source, warnings *warningCollector) 
 			return nil, err
 		}
 		for _, row := range rows {
+			if b.shouldHideGeneratedSkillCompatibilityRow(source, sourcePath, row) {
+				continue
+			}
 			if seen[row.Name] {
 				return nil, duplicateInstallTargetNameError(row.Name)
 			}

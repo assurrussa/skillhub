@@ -89,9 +89,19 @@ go run ./cmd/skillhub-dev tui-temp
 
 ## Shared Agent Context
 
-Use `$project-context-router` for cross-project context after local grounding.
-Resolve the shared root through `AGENT_CONTEXT_ROOT` or the skill resolver.
-Local verified docs and code remain the source of truth.
+Use `$project-context-router` when a task needs cross-project context
+from a local shared wiki.
+
+Do not hard-code machine-local absolute paths in this public repository.
+If a local shared wiki is available, expose its root through
+`AGENT_CONTEXT_ROOT` or let `$project-context-router` resolve it for the
+current session.
+
+Local docs and code in this repository remain the source of truth for
+commands, public APIs, config keys, supported imports, runtime behavior,
+and release gates. Read this repo's `AGENTS.md`, `README.md`, `docs/`
+or `reference/`, task files, code, tests, and configs before shared wiki
+pages.
 
 When shared context is needed, follow `streams/AGENTS.md` and its query route.
 Reuse already loaded root rules, PII policy and glossary. Open the known hub
@@ -106,6 +116,8 @@ For integration work, open only the affected neighbour hub:
 Use `streams/wiki/index.md` only to locate an unknown area or answer an overview
 question. This is a task router, not a mandatory list of wiki pages.
 
-
-If the wiki disagrees with local evidence, report the drift. Update the shared
-page only when documentation upkeep is in scope, after verification.
+If local verified docs/code conflict with the shared wiki, treat the wiki
+as stale. When documentation upkeep is in scope, update the relevant
+platform page after verification. Do not
+copy whole README files into wiki; keep shared pages concise and
+contract-focused.

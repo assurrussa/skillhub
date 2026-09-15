@@ -269,6 +269,9 @@ func (m model) updateCommandDone(msg commandDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.action == "Install" && len(m.install.pending.Targets) > 0 {
 		return m.finishPendingInstall()
 	}
+	if msg.action == "Remove source" || msg.action == "Rename source" {
+		m.completeSuccessfulSourceAction(msg.action, msg.renameSummary)
+	}
 	successStatus := msg.action + " complete."
 	if strings.TrimSpace(msg.output) != "" {
 		successStatus += " " + compactOutput(msg.output)
@@ -292,6 +295,14 @@ func installCompleteStatus(result InstallResult) string {
 }
 
 func (m model) afterCommandSuccess(action, successStatus string) (tea.Model, tea.Cmd) {
+	if action == "Remove source" || action == "Rename source" {
+		m.reloadOnFinish = false
+		m.loading = true
+		m.viewMode = viewSources
+		m.postReloadStatus = successStatus
+		m.status = "Reloading sources and installed skills..."
+		return m, tea.Batch(loadSources(m.repoRoot), loadInstalled(m.repoRoot), loadSkills(m.repoRoot))
+	}
 	if action == "Sync" || m.reloadOnFinish {
 		m.reloadOnFinish = false
 		return m.reloadCurrentView("Reloading...")
@@ -347,6 +358,14 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if m.viewMode == viewAddSource {
 		return m.sourcesSection().updateAddKey(msg)
+	}
+
+	if m.viewMode == viewRenameSource {
+		return m.sourcesSection().updateRenameKey(msg)
+	}
+
+	if m.viewMode == viewConfirmRemoveSource {
+		return m.sourcesSection().updateConfirmRemoveKey(msg)
 	}
 
 	if m.viewMode == viewInstallScope {
@@ -977,8 +996,105 @@ func (m model) updateSourcesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.startSourceSyncProgress(m.sources)
+	case "x":
+		source, ok := m.currentSource()
+		if !ok {
+			m.status = "No source selected."
+			return m, nil
+		}
+		m.pendingRemoveSource = source
+		m.pendingRemoveSourceDeps = m.countSourceDependencies(source.Name)
+		m.viewMode = viewConfirmRemoveSource
+		m.status = "Confirm source removal."
+		return m, nil
+	case "e", "R":
+		source, ok := m.currentSource()
+		if !ok {
+			m.status = "No source selected."
+			return m, nil
+		}
+		m.pendingRenameSource = source
+		m.pendingRenameSourceDeps = m.countSourceDependencies(source.Name)
+		m.sourceRenameInput = source.Name
+		m.viewMode = viewRenameSource
+		m.status = "Enter new name for source " + source.Name + "."
+		return m, nil
 	case "r":
 		return m.reloadCurrentView("Reloading sources...")
+	default:
+		return m, nil
+	}
+}
+
+func (m model) updateConfirmRemoveSourceKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q":
+		return m, tea.Quit
+	case keyEsc, "n":
+		m.pendingRemoveSource = SourcePreset{}
+		m.pendingRemoveSourceDeps = 0
+		m.viewMode = viewSources
+		m.status = "Source removal cancelled."
+		return m, nil
+	case keyEnter, "y":
+		if strings.TrimSpace(m.pendingRemoveSource.Name) == "" {
+			m.viewMode = viewSources
+			m.status = "No source selected."
+			return m, nil
+		}
+		source := m.pendingRemoveSource
+		m.busy = true
+		m.reloadOnFinish = true
+		m.status = "Removing source " + source.Name + "..."
+		cmd := runSourceCommand(m.repoRoot, "Remove source", "remove", source.Name, "--force")
+		return m, tea.Batch(cmd, busyTick())
+	default:
+		return m, nil
+	}
+}
+
+func (m model) updateRenameSourceKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.Type == tea.KeyRunes {
+		m.sourceRenameInput += msg.String()
+		return m, nil
+	}
+
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case keyEsc:
+		m.pendingRenameSource = SourcePreset{}
+		m.pendingRenameSourceDeps = 0
+		m.sourceRenameInput = ""
+		m.viewMode = viewSources
+		m.status = "Source rename cancelled."
+		return m, nil
+	case keyBackspace:
+		if m.sourceRenameInput != "" {
+			runes := []rune(m.sourceRenameInput)
+			m.sourceRenameInput = string(runes[:len(runes)-1])
+		}
+		return m, nil
+	case keyEnter:
+		newName := strings.ToLower(strings.TrimSpace(m.sourceRenameInput))
+		source := m.pendingRenameSource
+		if newName == "" {
+			m.status = "Enter a new source name."
+			return m, nil
+		}
+		if newName == source.Name {
+			m.pendingRenameSource = SourcePreset{}
+			m.pendingRenameSourceDeps = 0
+			m.sourceRenameInput = ""
+			m.viewMode = viewSources
+			m.status = "Source name unchanged."
+			return m, nil
+		}
+		m.busy = true
+		m.reloadOnFinish = true
+		m.status = fmt.Sprintf("Renaming source %s to %s...", source.Name, newName)
+		cmd := runSourceCommand(m.repoRoot, "Rename source", "rename", source.Name, newName)
+		return m, tea.Batch(cmd, busyTick())
 	default:
 		return m, nil
 	}

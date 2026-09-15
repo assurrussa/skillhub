@@ -19,6 +19,7 @@ import (
 
 const (
 	testArgAdd         = "add"
+	testCommandInstall = "install"
 	testCommandSkills  = "skills"
 	testCommandSources = "sources"
 	testCommandTargets = "targets"
@@ -190,6 +191,10 @@ func commandCLIArgs(command string, args ...string) ([]string, error) {
 		return append([]string{testCommandSkills}, args...), nil
 	case testCommandSources:
 		return append([]string{testCommandSources}, args...), nil
+	case "source":
+		return append([]string{"source"}, args...), nil
+	case testCommandInstall:
+		return append([]string{testCommandInstall}, args...), nil
 	case "installed":
 		return append([]string{"installed"}, args...), nil
 	case testCommandTargets:
@@ -1349,6 +1354,176 @@ func TestSourcesRemoveClearsGitCacheAndSyncState(t *testing.T) {
 	}
 }
 
+func TestSourcesRemoveGuardsDependencies(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	sourceDir := filepath.Join(tmp, "source")
+	projectDir := filepath.Join(tmp, "project")
+	writeInstallableTestSource(t, sourceDir, "guard-rules", "v1")
+	runGit(t, sourceDir, "init")
+	runGit(t, sourceDir, "checkout", "-b", "main")
+	commitGitSource(t, sourceDir, "initial commit")
+
+	_, _, err := runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "sources", "add", sourceDir, "--name", "dep-source", "--type", "git", "--ref", "main")
+	if err != nil {
+		t.Fatalf("sources add failed: %v", err)
+	}
+
+	_, _, err = runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "install", "dep-source/guard-rules", "--target", "codex", "--scope", "project", "--project", projectDir)
+	if err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	// 1. Remove without force must fail
+	_, stderr, err := runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "sources", "remove", "dep-source")
+	if err == nil {
+		t.Fatalf("expected error when removing source with dependent installed skills")
+	}
+	if !strings.Contains(stderr, "1 installed skill(s) depend on it") {
+		t.Fatalf("unexpected stderr: %s", stderr)
+	}
+
+	// 2. Remove with --force must succeed
+	stdout, stderr, err := runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "sources", "remove", "dep-source", "--force")
+	if err != nil {
+		t.Fatalf("sources remove --force failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Removed source dep-source") {
+		t.Fatalf("unexpected stdout: %s", stdout)
+	}
+}
+
+func TestSourcesRenameUpdatesDependencies(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	sourceDir := filepath.Join(tmp, "source")
+	projectDir := filepath.Join(tmp, "project")
+	writeInstallableTestSource(t, sourceDir, "rename-rules", "v1")
+	runGit(t, sourceDir, "init")
+	runGit(t, sourceDir, "checkout", "-b", "main")
+	commitGitSource(t, sourceDir, "initial commit")
+
+	_, _, err := runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "sources", "add", sourceDir, "--name", "old-name", "--type", "git", "--ref", "main")
+	if err != nil {
+		t.Fatalf("sources add failed: %v", err)
+	}
+
+	_, _, err = runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "install", "old-name/rename-rules", "--target", "codex", "--scope", "project", "--project", projectDir)
+	if err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	// Rename using rename command
+	stdout, stderr, err := runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "sources", "rename", "old-name", "new-name")
+	if err != nil {
+		t.Fatalf("sources rename failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Renamed source old-name to new-name") {
+		t.Fatalf("unexpected stdout: %s", stdout)
+	}
+
+	// Check sources list
+	stdout, _, err = runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "sources", "list", "--tsv")
+	if err != nil {
+		t.Fatalf("sources list failed: %v", err)
+	}
+	if !strings.Contains(stdout, "new-name\t") || strings.Contains(stdout, "old-name\t") {
+		t.Fatalf("sources list output incorrect: %s", stdout)
+	}
+
+	// Check installed list
+	stdout, _, err = runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "installed", "list", "--target", "codex", "--scope", "project", "--project", projectDir, "--tsv")
+	if err != nil {
+		t.Fatalf("installed list failed: %v", err)
+	}
+	if !strings.Contains(stdout, "new-name") || strings.Contains(stdout, "old-name") {
+		t.Fatalf("installed list output incorrect: %s", stdout)
+	}
+
+	// Check lockfile
+	lockPath := filepath.Join(projectDir, "skills.lock.toml")
+	lockData, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatalf("read lockfile: %v", err)
+	}
+	if !strings.Contains(string(lockData), `source = "new-name"`) ||
+		!strings.Contains(string(lockData), `qualified_skill = "new-name/rename-rules"`) {
+		t.Fatalf("lockfile content incorrect: %s", string(lockData))
+	}
+}
+
+func TestSourcesCommandAliases(t *testing.T) {
+	tmp := t.TempDir()
+	configDir := filepath.Join(tmp, "config")
+	cacheDir := filepath.Join(tmp, "cache")
+	sourceDir := filepath.Join(tmp, "source")
+	initGitSource(t, sourceDir, "alias-rules")
+
+	// 1. source alias for sources
+	_, _, err := runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "source", "add", sourceDir, "--name", "alpha", "--type", "git", "--ref", "main")
+	if err != nil {
+		t.Fatalf("source add failed: %v", err)
+	}
+
+	stdout, _, err := runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "source", "list", "--tsv")
+	if err != nil || !strings.Contains(stdout, "alpha\t") {
+		t.Fatalf("source list failed: %v\nstdout: %s", err, stdout)
+	}
+
+	// 2. mv alias for rename
+	stdout, _, err = runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "sources", "mv", "alpha", "beta")
+	if err != nil || !strings.Contains(stdout, "Renamed source alpha to beta") {
+		t.Fatalf("sources mv failed: %v\nstdout: %s", err, stdout)
+	}
+
+	// 3. rm alias for remove
+	stdout, _, err = runCLISplitForTest(t, []string{
+		"SKILLHUB_CONFIG_DIR=" + configDir,
+		"SKILLHUB_CACHE_DIR=" + cacheDir,
+	}, "sources", "rm", "beta")
+	if err != nil || !strings.Contains(stdout, "Removed source beta") {
+		t.Fatalf("sources rm failed: %v\nstdout: %s", err, stdout)
+	}
+}
+
 func TestSkillsListRejectsCacheWhenCachedOriginDiffers(t *testing.T) {
 	tmp := t.TempDir()
 	configDir := filepath.Join(tmp, "config")
@@ -1686,7 +1861,9 @@ func TestRootSkillFileSourceNormalizesSourceNameAndInstalls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("skills list root skill file failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "uncodixfy\tuncodixfy\tuncodixfy\tuncodixfy\tPrevents generic AI UI patterns. Use http://example.test and note: keep text.") {
+	wantRootSkill := "uncodixfy\tuncodixfy\tuncodixfy\tuncodixfy\t" +
+		"Prevents generic AI UI patterns. Use http://example.test and note: keep text."
+	if !strings.Contains(stdout, wantRootSkill) {
 		t.Fatalf("expected root SKILL.md generated row, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
 	}
 
@@ -1732,8 +1909,12 @@ func TestPluginBundleSourceCanBeAddedListedSearchedAndInstalled(t *testing.T) {
 		t.Fatalf("skills list plugin bundle failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
 	for _, want := range []string{
-		"stitch-skills\tstitch-design_generate-design\tstitch-design\tstitch-design,generate-design,stitch::generate-design\tGenerate new screens from text prompts or images with design system tokens.",
-		"stitch-skills\tstitch-build_react-components\tstitch-build\tstitch-build,react-components,react:components\tConverts Stitch designs into modular Vite and React components.",
+		"stitch-skills\tstitch-design_generate-design\tstitch-design\t" +
+			"stitch-design,generate-design,stitch::generate-design\t" +
+			"Generate new screens from text prompts or images with design system tokens.",
+		"stitch-skills\tstitch-build_react-components\tstitch-build\t" +
+			"stitch-build,react-components,react:components\t" +
+			"Converts Stitch designs into modular Vite and React components.",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("expected plugin bundle generated row %q, got stdout:\n%s\nstderr:\n%s", want, stdout, stderr)

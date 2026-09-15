@@ -81,19 +81,21 @@ type ProjectLockStatus struct {
 }
 
 const (
-	viewSkills           = "skills"
-	viewInstalled        = "installed"
-	viewSources          = "sources"
-	viewDefaults         = "defaults"
-	viewAddSource        = "add-source"
-	viewDetails          = "details"
-	viewInstalledDetails = "installed-details"
-	viewTargets          = "targets"
-	viewInstallScope     = "install-scope"
-	viewInstallConfirm   = "install-confirm"
-	viewInstallResult    = "install-result"
-	viewConfirmDelete    = "confirm-delete"
-	viewHelp             = "help"
+	viewSkills              = "skills"
+	viewInstalled           = "installed"
+	viewSources             = "sources"
+	viewDefaults            = "defaults"
+	viewAddSource           = "add-source"
+	viewDetails             = "details"
+	viewInstalledDetails    = "installed-details"
+	viewTargets             = "targets"
+	viewInstallScope        = "install-scope"
+	viewInstallConfirm      = "install-confirm"
+	viewInstallResult       = "install-result"
+	viewConfirmDelete       = "confirm-delete"
+	viewConfirmRemoveSource = "confirm-remove-source"
+	viewRenameSource        = "rename-source"
+	viewHelp                = "help"
 )
 
 type InstallResult struct {

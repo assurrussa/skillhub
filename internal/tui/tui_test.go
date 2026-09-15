@@ -2543,28 +2543,28 @@ func TestSkillsScrollKeepsCursorVisibleWithWrappedGroupedCards(t *testing.T) {
 	)
 	m.Skills = []tui.Skill{
 		{
-			Source:      "alpha",
+			Source:      testSourceAlpha,
 			Name:        "skill-00",
 			Category:    "backend",
 			Triggers:    "alpha-backend",
 			Description: longDescription,
 		},
 		{
-			Source:      "alpha",
+			Source:      testSourceAlpha,
 			Name:        "skill-01",
 			Category:    "frontend",
 			Triggers:    "alpha-frontend",
 			Description: longDescription,
 		},
 		{
-			Source:      "beta",
+			Source:      testSourceBeta,
 			Name:        "skill-02",
 			Category:    "go",
 			Triggers:    "beta-go",
 			Description: longDescription,
 		},
 		{
-			Source:      "beta",
+			Source:      testSourceBeta,
 			Name:        "skill-03",
 			Category:    "go",
 			Description: "Short skill description.",
@@ -2792,5 +2792,122 @@ func TestInstallStepWithLegacyEnv(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(homeDir, ".agents", "skills", "engineering_tdd")); !os.IsNotExist(err) {
 		t.Fatalf("expected install not to use default home target, stat err=%v", err)
+	}
+}
+
+func TestTUISourcesRemovePromptAndExecution(t *testing.T) {
+	model := tui.InitialModel(".")
+	model.Loading = false
+	model.ViewMode = tui.ViewSources
+	model.Sources = []tui.SourcePreset{
+		{Name: testSourceAlpha, Type: "git", Location: "https://github.com/example/alpha", Ref: "main"},
+	}
+
+	// Press x to trigger remove confirmation
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	model = asModel(t, updated)
+	if model.ViewMode != tui.ViewConfirmRemoveSource {
+		t.Fatalf("expected viewConfirmRemoveSource, got %s", model.ViewMode)
+	}
+	if model.PendingRemoveSource.Name != testSourceAlpha {
+		t.Fatalf("expected pending remove source alpha, got %s", model.PendingRemoveSource.Name)
+	}
+	content := model.ConfirmRemoveSourceContent(80)
+	if !strings.Contains(content, "Remove skill source?") || !strings.Contains(content, testSourceAlpha) {
+		t.Fatalf("unexpected confirm remove content:\n%s", content)
+	}
+
+	// Esc cancels removal
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = asModel(t, updated)
+	if model.ViewMode != tui.ViewSources {
+		t.Fatalf("expected returned to viewSources after esc, got %s", model.ViewMode)
+	}
+	if model.Status != "Source removal cancelled." {
+		t.Fatalf("expected cancelled status, got %s", model.Status)
+	}
+
+	// Press x again, then enter to confirm
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	model = asModel(t, updated)
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = asModel(t, updated)
+	if cmd == nil {
+		t.Fatalf("expected batch command on confirm remove")
+	}
+	if !model.Busy || !model.ReloadOnFinish {
+		t.Fatalf("expected busy and reloadOnFinish true")
+	}
+	if !strings.Contains(model.Status, "Removing source alpha") {
+		t.Fatalf("unexpected status: %s", model.Status)
+	}
+}
+
+func TestTUISourcesRenamePromptAndExecution(t *testing.T) {
+	model := tui.InitialModel(".")
+	model.Loading = false
+	model.ViewMode = tui.ViewSources
+	model.Sources = []tui.SourcePreset{
+		{Name: testSourceAlpha, Type: "git", Location: "https://github.com/example/alpha", Ref: "main"},
+	}
+
+	// Press e to trigger rename view
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	model = asModel(t, updated)
+	if model.ViewMode != tui.ViewRenameSource {
+		t.Fatalf("expected viewRenameSource, got %s", model.ViewMode)
+	}
+	if model.PendingRenameSource.Name != testSourceAlpha {
+		t.Fatalf("expected pending rename source alpha, got %s", model.PendingRenameSource.Name)
+	}
+	if model.SourceRenameInput != testSourceAlpha {
+		t.Fatalf("expected initial rename input alpha, got %s", model.SourceRenameInput)
+	}
+	content := model.RenameSourceContent(80)
+	if !strings.Contains(content, "Rename skill source") || !strings.Contains(content, testSourceAlpha) {
+		t.Fatalf("unexpected rename content:\n%s", content)
+	}
+
+	// Esc cancels rename
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = asModel(t, updated)
+	if model.ViewMode != tui.ViewSources {
+		t.Fatalf("expected returned to viewSources after esc, got %s", model.ViewMode)
+	}
+	if model.Status != "Source rename cancelled." {
+		t.Fatalf("expected cancelled status, got %s", model.Status)
+	}
+
+	// Press R to trigger rename view again
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
+	model = asModel(t, updated)
+	if model.ViewMode != tui.ViewRenameSource {
+		t.Fatalf("expected viewRenameSource after R, got %s", model.ViewMode)
+	}
+
+	// Delete existing input and type beta
+	for range testSourceAlpha {
+		updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+		model = asModel(t, updated)
+	}
+	for _, r := range testSourceBeta {
+		updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		model = asModel(t, updated)
+	}
+	if model.SourceRenameInput != testSourceBeta {
+		t.Fatalf("expected input beta, got %s", model.SourceRenameInput)
+	}
+
+	// Press Enter to confirm rename
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = asModel(t, updated)
+	if cmd == nil {
+		t.Fatalf("expected batch command on confirm rename")
+	}
+	if !model.Busy || !model.ReloadOnFinish {
+		t.Fatalf("expected busy and reloadOnFinish true")
+	}
+	if !strings.Contains(model.Status, "Renaming source alpha to beta") {
+		t.Fatalf("unexpected status: %s", model.Status)
 	}
 }

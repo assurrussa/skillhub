@@ -173,6 +173,26 @@ type SourceAddOptions struct {
 	Catalog  string
 }
 
+type SourceRemoveOptions struct {
+	Name  string
+	Force bool
+}
+
+type SourceRenameOptions struct {
+	OldName string
+	NewName string
+}
+
+type SourceRenameSummary struct {
+	OldName          string
+	NewName          string
+	RenamedSkillOld  string
+	RenamedSkillNew  string
+	InstalledUpdated int
+	LockfilesUpdated int
+	Output           string
+}
+
 type InstallOptions struct {
 	All     bool
 	Names   []string

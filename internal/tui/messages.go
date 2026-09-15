@@ -1,6 +1,10 @@
 package tui
 
-import "time"
+import (
+	"time"
+
+	"github.com/assurrussa/skillhub/internal/core"
+)
 
 type skillsLoadedMsg struct {
 	skills  []Skill
@@ -35,9 +39,10 @@ type lockStatusLoadedMsg struct {
 }
 
 type commandDoneMsg struct {
-	action string
-	output string
-	err    error
+	action        string
+	output        string
+	err           error
+	renameSummary core.SourceRenameSummary
 }
 
 type sourceSyncStepDoneMsg struct {

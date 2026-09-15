@@ -1,6 +1,10 @@
 package tui
 
-import tea "github.com/charmbracelet/bubbletea"
+import (
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/assurrussa/skillhub/internal/core"
+)
 
 const (
 	FlagDir     = flagDir
@@ -28,19 +32,21 @@ const (
 	TargetPurposeInstall  = targetPurposeInstall
 	TargetStatusSupported = targetStatusSupported
 
-	ViewSkills           = viewSkills
-	ViewInstalled        = viewInstalled
-	ViewSources          = viewSources
-	ViewDefaults         = viewDefaults
-	ViewAddSource        = viewAddSource
-	ViewDetails          = viewDetails
-	ViewInstalledDetails = viewInstalledDetails
-	ViewTargets          = viewTargets
-	ViewInstallScope     = viewInstallScope
-	ViewInstallConfirm   = viewInstallConfirm
-	ViewInstallResult    = viewInstallResult
-	ViewConfirmDelete    = viewConfirmDelete
-	ViewHelp             = viewHelp
+	ViewSkills              = viewSkills
+	ViewInstalled           = viewInstalled
+	ViewSources             = viewSources
+	ViewDefaults            = viewDefaults
+	ViewAddSource           = viewAddSource
+	ViewDetails             = viewDetails
+	ViewInstalledDetails    = viewInstalledDetails
+	ViewTargets             = viewTargets
+	ViewInstallScope        = viewInstallScope
+	ViewInstallConfirm      = viewInstallConfirm
+	ViewInstallResult       = viewInstallResult
+	ViewConfirmDelete       = viewConfirmDelete
+	ViewConfirmRemoveSource = viewConfirmRemoveSource
+	ViewRenameSource        = viewRenameSource
+	ViewHelp                = viewHelp
 )
 
 var (
@@ -102,17 +108,22 @@ type TestModel struct {
 	PostReloadStatus      string
 	SpinnerFrame          int
 
-	InstallScope       string
-	InstallScopeCursor int
-	ProjectDir         string
-	TargetPurpose      string
-	TargetChoices      []InstallTargetChoice
-	SelectedTargets    map[string]bool
-	PendingInstall     InstallResult
-	InstallResult      InstallResult
-	InstallProgress    TestInstallProgress
-	SourceProgress     TestSourceProgress
-	PendingUninstall   InstalledSkill
+	InstallScope            string
+	InstallScopeCursor      int
+	ProjectDir              string
+	TargetPurpose           string
+	TargetChoices           []InstallTargetChoice
+	SelectedTargets         map[string]bool
+	PendingInstall          InstallResult
+	InstallResult           InstallResult
+	InstallProgress         TestInstallProgress
+	SourceProgress          TestSourceProgress
+	PendingUninstall        InstalledSkill
+	PendingRemoveSource     SourcePreset
+	PendingRemoveSourceDeps int
+	PendingRenameSource     SourcePreset
+	PendingRenameSourceDeps int
+	SourceRenameInput       string
 }
 
 type SkillsLoadedMsg struct {
@@ -148,9 +159,10 @@ type LockStatusLoadedMsg struct {
 }
 
 type CommandDoneMsg struct {
-	Action string
-	Output string
-	Err    error
+	Action        string
+	Output        string
+	Err           error
+	RenameSummary core.SourceRenameSummary
 }
 
 type SourceSyncStepDoneMsg struct {
@@ -235,6 +247,14 @@ func (m TestModel) RenderHeader(width int) string {
 
 func (m TestModel) AddSourceContent(width int) string {
 	return m.innerModel().addSourceContent(width)
+}
+
+func (m TestModel) ConfirmRemoveSourceContent(width int) string {
+	return m.innerModel().confirmRemoveSourceContent(width)
+}
+
+func (m TestModel) RenameSourceContent(width int) string {
+	return m.innerModel().renameSourceContent(width)
 }
 
 func ParseSkillsTSV(input string) ([]Skill, error) {
@@ -360,17 +380,22 @@ func testModelFromModel(m model) TestModel {
 		PostReloadStatus:      m.postReloadStatus,
 		SpinnerFrame:          m.spinnerFrame,
 
-		InstallScope:       m.install.scope,
-		InstallScopeCursor: m.install.scopeCursor,
-		ProjectDir:         m.projectDir,
-		TargetPurpose:      m.install.targetPurpose,
-		TargetChoices:      m.install.targetChoices,
-		SelectedTargets:    m.install.selectedTargets,
-		PendingInstall:     m.install.pending,
-		InstallResult:      m.install.result,
-		InstallProgress:    m.install.progress,
-		SourceProgress:     m.sourceProgress,
-		PendingUninstall:   m.pendingUninstall,
+		InstallScope:            m.install.scope,
+		InstallScopeCursor:      m.install.scopeCursor,
+		ProjectDir:              m.projectDir,
+		TargetPurpose:           m.install.targetPurpose,
+		TargetChoices:           m.install.targetChoices,
+		SelectedTargets:         m.install.selectedTargets,
+		PendingInstall:          m.install.pending,
+		InstallResult:           m.install.result,
+		InstallProgress:         m.install.progress,
+		SourceProgress:          m.sourceProgress,
+		PendingUninstall:        m.pendingUninstall,
+		PendingRemoveSource:     m.pendingRemoveSource,
+		PendingRemoveSourceDeps: m.pendingRemoveSourceDeps,
+		PendingRenameSource:     m.pendingRenameSource,
+		PendingRenameSourceDeps: m.pendingRenameSourceDeps,
+		SourceRenameInput:       m.sourceRenameInput,
 	}
 }
 
@@ -433,6 +458,11 @@ func (m TestModel) innerModel() model {
 	inner.install.progress = m.InstallProgress
 	inner.sourceProgress = m.SourceProgress
 	inner.pendingUninstall = m.PendingUninstall
+	inner.pendingRemoveSource = m.PendingRemoveSource
+	inner.pendingRemoveSourceDeps = m.PendingRemoveSourceDeps
+	inner.pendingRenameSource = m.PendingRenameSource
+	inner.pendingRenameSourceDeps = m.PendingRenameSourceDeps
+	inner.sourceRenameInput = m.SourceRenameInput
 
 	return inner
 }
@@ -452,7 +482,7 @@ func toInnerMsg(msg tea.Msg) tea.Msg {
 	case LockStatusLoadedMsg:
 		return lockStatusLoadedMsg{status: msg.Status, err: msg.Err}
 	case CommandDoneMsg:
-		return commandDoneMsg{action: msg.Action, output: msg.Output, err: msg.Err}
+		return commandDoneMsg{action: msg.Action, output: msg.Output, err: msg.Err, renameSummary: msg.RenameSummary}
 	case SourceSyncStepDoneMsg:
 		return sourceSyncStepDoneMsg{output: msg.Output, err: msg.Err}
 	case InstallStepDoneMsg:
@@ -477,7 +507,7 @@ func toExportMsg(msg tea.Msg) tea.Msg {
 	case lockStatusLoadedMsg:
 		return LockStatusLoadedMsg{Status: msg.status, Err: msg.err}
 	case commandDoneMsg:
-		return CommandDoneMsg{Action: msg.action, Output: msg.output, Err: msg.err}
+		return CommandDoneMsg{Action: msg.action, Output: msg.output, Err: msg.err, RenameSummary: msg.renameSummary}
 	case sourceSyncStepDoneMsg:
 		return SourceSyncStepDoneMsg{Output: msg.output, Err: msg.err}
 	case installStepDoneMsg:

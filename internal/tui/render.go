@@ -137,6 +137,12 @@ func (m model) renderBody(width int) string {
 	if m.viewMode == viewConfirmDelete {
 		return m.renderPanel("Confirm uninstall", m.confirmDeleteContent(width-6), width)
 	}
+	if m.viewMode == viewConfirmRemoveSource {
+		return m.renderPanel("Confirm remove source", m.sourcesSection().confirmRemoveContent(width-6), width)
+	}
+	if m.viewMode == viewRenameSource {
+		return m.renderPanel(actionRenameSource, m.sourcesSection().renameContent(width-6), width)
+	}
 	if m.viewMode == viewInstallScope {
 		return m.renderPanel("Install scope", m.installFlow().scopeContent(width-6), width)
 	}
@@ -1026,8 +1032,66 @@ func (m model) helpContent(width int) string {
 	lines = append(lines, updateLines...)
 	lines = append(lines,
 		"1/2/3 or left/right sections  j/k move  enter open",
-		"Skills: / search  space queue  i install  Sources: u/U/s update",
+		"Skills: / search  space queue  i install  Sources: u/U/s update  e rename  x remove",
 		"Installed: enter locations  u update  x uninstall  esc/? back  q quit",
+	)
+	return strings.Join(lines, "\n")
+}
+
+func (m model) confirmRemoveSourceContent(width int) string {
+	source := m.pendingRemoveSource
+	if strings.TrimSpace(source.Name) == "" {
+		return statusNoSourceSelected
+	}
+	lines := []string{
+		titleStyle.Render("Remove skill source?"),
+		"",
+		labelLine("Name", source.Name),
+		labelLine("Type", source.Type),
+		labelLine("Location", source.Location),
+		labelLine("Ref", source.Ref),
+		"",
+	}
+	if m.pendingRemoveSourceDeps > 0 {
+		warningMsg := fmt.Sprintf("Warning: %d installed skill(s) depend on this source.", m.pendingRemoveSourceDeps)
+		lines = append(lines, warningStyle.Render(warningMsg), "")
+	}
+	lines = append(lines,
+		wrapText(
+			"Removing the source removes its configuration and cache. Any installed skills "+
+				"from this source will remain installed on disk, but can no longer be updated or restored.", width,
+		),
+		"",
+		checkedStyle.Render("enter/y confirm")+"  "+helpStyle.Render("esc/n cancel"),
+	)
+	return strings.Join(lines, "\n")
+}
+
+func (m model) renameSourceContent(width int) string {
+	source := m.pendingRenameSource
+	if strings.TrimSpace(source.Name) == "" {
+		return statusNoSourceSelected
+	}
+	nameCursor := "_"
+	lines := []string{
+		titleStyle.Render("Rename skill source across dependencies"),
+		"",
+		labelLine("Current name", source.Name),
+		labelLine("New name", m.sourceRenameInput+nameCursor),
+		labelLine("Location", source.Location),
+		"",
+	}
+	if m.pendingRenameSourceDeps > 0 {
+		infoMsg := fmt.Sprintf("%d installed skill(s) and their project lockfiles will be updated.", m.pendingRenameSourceDeps)
+		lines = append(lines, checkedStyle.Render(infoMsg), "")
+	}
+	lines = append(lines,
+		wrapText(
+			"Renaming the source updates sources.tsv, moves cache directories, "+
+				"and updates all dependent installed skills and project lockfiles.", width,
+		),
+		"",
+		checkedStyle.Render("enter confirm")+"  "+helpStyle.Render("esc cancel"),
 	)
 	return strings.Join(lines, "\n")
 }
@@ -1097,6 +1161,12 @@ func (m model) helpText() string {
 	if m.viewMode == viewAddSource {
 		return "tab field  enter add  esc back  ctrl+c quit"
 	}
+	if m.viewMode == viewConfirmRemoveSource {
+		return "enter/y confirm  esc/n cancel  q quit"
+	}
+	if m.viewMode == viewRenameSource {
+		return "enter confirm  esc cancel  ctrl+c quit"
+	}
 	if m.viewMode == viewInstallScope {
 		return "j/k move  enter continue  esc cancel  q quit"
 	}
@@ -1119,7 +1189,8 @@ func (m model) helpText() string {
 		return "1-3/left-right sections  j/k move  enter locations  u update single  x uninstall single  r reload  ? help  q quit"
 	}
 	if m.viewMode == viewSources {
-		return "1-3/left-right sections  j/k move  u update source  U/s update all  d presets  n custom  r reload  ? help  q quit"
+		return "1-3/left-right sections  j/k move  u update source  U/s update all  " +
+			"d presets  n custom  e rename  x remove  r reload  ? help  q quit"
 	}
 	if m.viewMode == viewTargets {
 		if m.install.targetPurpose == targetPurposeInstall {

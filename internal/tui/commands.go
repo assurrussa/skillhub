@@ -151,6 +151,22 @@ func runInstalledCommand(repoRoot, action string, args ...string) tea.Cmd {
 
 func runSourceCommand(repoRoot, action string, args ...string) tea.Cmd {
 	return func() tea.Msg {
+		if len(args) > 0 && args[0] == commandRename {
+			backend, err := newBackend(repoRoot)
+			if err != nil {
+				return commandDoneMsg{action: action, err: err}
+			}
+			if len(args) < 3 {
+				return commandDoneMsg{action: action, err: errors.New("source rename requires old and new source names")}
+			}
+			summary, err := backend.RenameSource(core.SourceRenameOptions{OldName: args[1], NewName: args[2]})
+			return commandDoneMsg{
+				action:        action,
+				output:        summary.Output,
+				err:           err,
+				renameSummary: summary,
+			}
+		}
 		output, err := runCoreSourceCommand(repoRoot, args...)
 		return commandDoneMsg{action: action, output: output, err: err}
 	}
@@ -673,9 +689,38 @@ func runCoreSourceCommand(repoRoot string, args ...string) (string, error) {
 		return runCoreSourceAdd(backend, args)
 	case "defaults":
 		return runCoreSourceDefaults(backend, args)
+	case commandRemove:
+		return runCoreSourceRemove(backend, args)
+	case commandRename:
+		return runCoreSourceRename(backend, args)
 	default:
 		return "", fmt.Errorf("unsupported source command: %s", args[0])
 	}
+}
+
+func runCoreSourceRemove(backend *core.Backend, args []string) (string, error) {
+	if len(args) < 2 {
+		return "", errors.New("source remove requires a source name")
+	}
+	name := args[1]
+	force := false
+	for i := 2; i < len(args); i++ {
+		if args[i] == "--force" || args[i] == "-f" {
+			force = true
+		}
+	}
+	return backend.RemoveSource(core.SourceRemoveOptions{Name: name, Force: force})
+}
+
+func runCoreSourceRename(backend *core.Backend, args []string) (string, error) {
+	if len(args) < 3 {
+		return "", errors.New("source rename requires old and new source names")
+	}
+	summary, err := backend.RenameSource(core.SourceRenameOptions{OldName: args[1], NewName: args[2]})
+	if err != nil {
+		return "", err
+	}
+	return summary.Output, nil
 }
 
 func runCoreSourceSync(backend *core.Backend, args []string) (string, error) {

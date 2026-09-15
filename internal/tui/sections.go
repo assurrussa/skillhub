@@ -79,7 +79,7 @@ func (s targetsSectionModel) panelTitle() string {
 }
 
 func (s sourcesSectionModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	return s.root.updateSourcesKey(msg)
+	return s.root.updateSourcesKeySafe(msg)
 }
 
 func (s sourcesSectionModel) updateDefaultsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -88,6 +88,14 @@ func (s sourcesSectionModel) updateDefaultsKey(msg tea.KeyMsg) (tea.Model, tea.C
 
 func (s sourcesSectionModel) updateAddKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return s.root.updateAddSourceKey(msg)
+}
+
+func (s sourcesSectionModel) updateConfirmRemoveKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	return s.root.updateConfirmRemoveSourceKey(msg)
+}
+
+func (s sourcesSectionModel) updateRenameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	return s.root.updateRenameSourceKey(msg)
 }
 
 func (s sourcesSectionModel) content(width int) string {
@@ -100,4 +108,12 @@ func (s sourcesSectionModel) defaultsContent(width int) string {
 
 func (s sourcesSectionModel) addContent(width int) string {
 	return s.root.addSourceContent(width)
+}
+
+func (s sourcesSectionModel) confirmRemoveContent(width int) string {
+	return s.root.confirmRemoveSourceContent(width)
+}
+
+func (s sourcesSectionModel) renameContent(width int) string {
+	return s.root.renameSourceContent(width)
 }

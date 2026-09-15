@@ -89,23 +89,54 @@ Supported source layouts:
 
 - native `catalog/skills.tsv` plus `skills/<name>/SKILL.md`
 - nested `skills/**/SKILL.md`, materialized as path-prefixed names
-- Codex plugin-bundle `plugins/<plugin>/skills/**/SKILL.md`, materialized as
-  plugin-prefixed names
+- plugin bundles at `plugins/<plugin>/skills/**/SKILL.md`; generated installs
+  use the upstream name when it does not occupy the legacy ID namespace
 - root-level `SKILL.md` or `<name>/SKILL.md`
+
+Generated catalogs reserve historical path-prefixed IDs before assigning shorter
+names. An existing ID never changes which skill it resolves to during update or
+restore. Plugin names containing `_` retain their path prefix, even before a
+collision exists: `a/foo` is listed as `foo` with hidden legacy alias `a_foo`,
+while `b/a_foo` remains `b_a_foo`. If multiple skills prefer the same shorter
+name, historical owners keep their path-prefixed IDs instead of making the
+source unusable. Hidden aliases are accepted explicitly and in
+existing metadata/lockfiles, but are excluded from discovery and `install --all`.
+Ambiguous historical IDs are rejected, not silently rebound. Legacy path-prefixed
+installs preserve the upstream `SKILL.md` content.
+
+Older generated caches are rebuilt from the local source checkout when their
+naming-policy version changes. This does not fetch from the network; a missing
+checkout must first be restored with `skillhub sources sync <source>`.
 
 Examples:
 
 ```sh
 skillhub sources add https://github.com/mattpocock/skills --name mattpocock
+skillhub sources add https://github.com/onmax/nuxt-skills
+skillhub sources defaults add humanlayer-skills
 skillhub sources defaults add stitch-skills
 skillhub sources add ../agent-rules --name local-agent-rules
 skillhub install mattpocock/engineering_tdd --target codex --scope global
 skillhub install stitch-skills/stitch-design_generate-design --target codex --scope global
 ```
 
+For GitHub repositories added without `--name`, Skillhub derives a collision-
+resistant lower-case source ID from `<owner>-<repo>`. For example,
+`https://github.com/onmax/nuxt-skills` becomes `onmax-nuxt-skills` and
+`https://github.com/humanlayer/skills` becomes `humanlayer-skills`. Existing
+configured aliases are not renamed automatically. Explicit `--name` always
+wins.
+
 Skillhub installs individual skill directories from plugin-bundle sources. It
 does not install or manage Codex plugins or plugin marketplace entries.
 Source names are case-insensitive on input and stored as lower-case IDs.
+
+Source rename requires an inspectable local source path or Git checkout. Restore
+an unavailable path or run `skillhub sources sync <old-name>` before renaming.
+For unnamed root skills whose IDs derive from the source alias, rename checks
+the proposed catalog IDs and installation destinations before changing any
+registry entries, sidecars, lockfiles, or installed directories. A conflict
+rejects the operation and leaves the old source and installations unchanged.
 
 GitHub tree URLs are normalized to repo URL plus ref:
 
@@ -186,7 +217,8 @@ enter      open or confirm
 i          install queued skills
 u          update highlighted install/source
 U or s     update all sources in Sources
-x          uninstall highlighted managed skill
+e          rename highlighted source across dependencies in Sources
+x          uninstall highlighted managed skill / remove source
 r          reload; in Help, restore project lockfile
 ?          help
 q          quit
@@ -222,7 +254,9 @@ skillhub sources sync agent-rules
 skillhub sources defaults list
 skillhub sources defaults add agent-rules
 skillhub sources add ../agent-rules --name local-agent-rules
-skillhub sources remove local-agent-rules
+skillhub sources rename local-agent-rules my-agent-rules
+skillhub sources remove my-agent-rules
+skillhub sources remove my-agent-rules --force
 ```
 
 Catalog and install:

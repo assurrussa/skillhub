@@ -1,6 +1,8 @@
+//nolint:goconst // Repeated source and skill IDs make the preflight scenarios easier to audit.
 package core
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"os"
@@ -41,9 +43,14 @@ func newRenamePreflightFixture(t *testing.T, sourceType string) renamePreflightF
 		for _, args := range [][]string{
 			{"init", "--quiet", "--initial-branch=main", "--template="},
 			{"add", "SKILL.md"},
-			{"-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "fixture"},
+			{
+				"-c", "user.name=Test",
+				"-c", "user.email=test@example.invalid",
+				"-c", "commit.gpgsign=false",
+				"commit", "--quiet", "-m", "fixture",
+			},
 		} {
-			cmd := exec.Command("git", args...)
+			cmd := exec.CommandContext(context.Background(), "git", args...)
 			cmd.Dir = upstream
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("git fixture: %v\n%s", err, out)
@@ -70,7 +77,15 @@ func newRenamePreflightFixture(t *testing.T, sourceType string) renamePreflightF
 	if err != nil {
 		t.Fatal(err)
 	}
-	return renamePreflightFixture{backend: backend, source: sources[0], raw: raw, project: project, custom: custom, config: config, cache: cache}
+	return renamePreflightFixture{
+		backend: backend,
+		source:  sources[0],
+		raw:     raw,
+		project: project,
+		custom:  custom,
+		config:  config,
+		cache:   cache,
+	}
 }
 
 func (f renamePreflightFixture) snapshot(t *testing.T) map[string]string {
@@ -85,7 +100,7 @@ func (f renamePreflightFixture) snapshot(t *testing.T) map[string]string {
 				state[path] = "directory"
 				return nil
 			}
-			data, err := os.ReadFile(path)
+			data, err := os.ReadFile(path) //nolint:gosec // The walked tree is a private test fixture with no concurrent writers.
 			if err != nil {
 				return err
 			}
@@ -118,7 +133,7 @@ func TestRootRenameRejectsCatalogCollisionsBeforeMutation(t *testing.T) {
 		reason string
 	}{
 		{"nested", "beta", "skills/beta", "duplicate generated skill name beta"},
-		{"plugin", "beta", "plugins/plugin/skills/beta", "duplicate generated skill name beta"},
+		{"plugin", "beta", "plugins/plugin/skills/beta", "would change plugin/beta from beta to plugin_beta"},
 		{"legacy", "a_foo", "plugins/a/skills/foo", "ambiguous legacy skill name a_foo"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

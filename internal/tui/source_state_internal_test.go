@@ -1,3 +1,4 @@
+//nolint:goconst // Repeated source and queue IDs keep each state transition self-contained.
 package tui
 
 import (
@@ -151,7 +152,10 @@ func TestRenameCommandFailureKeepsEditableState(t *testing.T) {
 		action: "Rename source",
 		err:    errors.New("source already exists: beta"),
 	})
-	next := updated.(model)
+	next, ok := updated.(model)
+	if !ok {
+		t.Fatalf("expected model, got %T", updated)
+	}
 
 	if next.viewMode != viewRenameSource {
 		t.Fatalf("expected rename form to remain open, got %q", next.viewMode)
@@ -179,7 +183,10 @@ func TestRemoveCommandFailureKeepsConfirmationState(t *testing.T) {
 		action: "Remove source",
 		err:    errors.New("cannot write sources.tsv"),
 	})
-	next := updated.(model)
+	next, ok := updated.(model)
+	if !ok {
+		t.Fatalf("expected model, got %T", updated)
+	}
 
 	if next.viewMode != viewConfirmRemoveSource {
 		t.Fatalf("expected remove confirmation to remain open, got %q", next.viewMode)

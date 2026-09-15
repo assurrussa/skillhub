@@ -1,3 +1,4 @@
+//nolint:goconst // Repeated source names and timestamps keep transaction fixtures explicit.
 package core
 
 import (
@@ -7,18 +8,19 @@ import (
 	"testing"
 )
 
-func newSourceRegressionBackend(t *testing.T, cwd string) (*Backend, string, string) {
+func newSourceRegressionBackend(t *testing.T, cwd string) (backend *Backend, configDir, cacheDir string) {
 	t.Helper()
 	root := t.TempDir()
-	configDir := filepath.Join(root, "config")
-	cacheDir := filepath.Join(root, "cache")
+	configDir = filepath.Join(root, "config")
+	cacheDir = filepath.Join(root, "cache")
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatalf("mkdir config: %v", err)
 	}
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		t.Fatalf("mkdir cache: %v", err)
 	}
-	backend, err := New(Context{
+	var err error
+	backend, err = New(Context{
 		CallerCWD: cwd,
 		Env: map[string]string{
 			"SKILLHUB_CONFIG_DIR": configDir,
@@ -63,6 +65,29 @@ func TestRenameSourcePreflightsInstalledRegistry(t *testing.T) {
 	}
 	if string(after) != string(original) {
 		t.Fatalf("failed rename mutated sources.tsv:\n%s", after)
+	}
+}
+
+func TestRemoveSourceKeepsConfigurationWhenCacheCleanupFails(t *testing.T) {
+	projectDir := t.TempDir()
+	backend, configDir, cacheDir := newSourceRegressionBackend(t, projectDir)
+	writeRegressionSource(t, configDir, "alpha", filepath.Join(projectDir, "source"))
+	if err := os.RemoveAll(cacheDir); err != nil {
+		t.Fatalf("remove cache directory: %v", err)
+	}
+	if err := os.WriteFile(cacheDir, []byte("not a directory\n"), 0o644); err != nil {
+		t.Fatalf("replace cache directory with file: %v", err)
+	}
+
+	if _, err := backend.RemoveSource(SourceRemoveOptions{Name: "alpha", Force: true}); err == nil {
+		t.Fatal("expected cache cleanup failure")
+	}
+	sources, err := backend.ListSources()
+	if err != nil {
+		t.Fatalf("list sources after failed removal: %v", err)
+	}
+	if len(sources) != 1 || sources[0].Name != "alpha" {
+		t.Fatalf("failed removal changed source configuration: %#v", sources)
 	}
 }
 

@@ -1,3 +1,4 @@
+//nolint:goconst // Repeated old/new IDs make every migrated artifact explicit in this end-to-end fixture.
 package core
 
 import (
@@ -8,6 +9,7 @@ import (
 	"testing"
 )
 
+//nolint:gocognit,gocyclo // This end-to-end regression verifies every artifact participating in the rename transaction.
 func TestRenameSourceMigratesAliasDerivedRootSkillID(t *testing.T) {
 	projectDir := t.TempDir()
 	backend, configDir, _ := newSourceRegressionBackend(t, projectDir)
@@ -149,7 +151,8 @@ updated_at = "2026-09-15T00:00:00Z"
 	if err := json.Unmarshal(metaBytes, &migratedMeta); err != nil {
 		t.Fatalf("unmarshal migrated sidecar: %v", err)
 	}
-	if migratedMeta.Source != "beta" || migratedMeta.Skill != "beta" || migratedMeta.QualifiedSkill != "beta/beta" || migratedMeta.InstalledPath != customBeta {
+	if migratedMeta.Source != "beta" || migratedMeta.Skill != "beta" ||
+		migratedMeta.QualifiedSkill != "beta/beta" || migratedMeta.InstalledPath != customBeta {
 		t.Fatalf("sidecar identity/path not migrated: %#v", migratedMeta)
 	}
 

@@ -24,6 +24,7 @@ const (
 	statusLoadingInstalled = "Loading installed skills..."
 	statusEnterSource      = "Enter a source path or git URL."
 	statusNoInstalledSkill = "No installed skill selected."
+	statusNoSourceSelected = "No source selected."
 	statusSyncing          = "Syncing sources..."
 	statusReturnedSkills   = "Returned to skills."
 	statusSelectTarget     = "Select at least one supported install target."
@@ -53,4 +54,7 @@ const (
 	queueStatePending     = "pending"
 	queueStateRunning     = "running"
 	uiSelectedCursor      = "›"
+
+	actionRemoveSource = "Remove source"
+	actionRenameSource = "Rename source"
 )

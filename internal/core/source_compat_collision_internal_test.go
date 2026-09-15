@@ -1,3 +1,4 @@
+//nolint:goconst // Repeated IDs document the ownership relationships under test.
 package core
 
 import (
@@ -98,7 +99,10 @@ func TestPluginLegacyIDsKeepTheirOwnersThroughUpdateAndRestore(t *testing.T) {
 	// registry. The historical ID must still resolve to its original content.
 	freshProject := t.TempDir()
 	fresh, _, _ := newSourceRegressionBackend(t, freshProject)
-	if err := os.WriteFile(filepath.Join(freshProject, "skills.lock.toml"), lock, 0o644); err != nil {
+	lockPath := filepath.Join(freshProject, "skills.lock.toml")
+	// The destination is a private t.TempDir fixture, not a user-controlled path.
+	//nolint:gosec // Private test fixture path.
+	if err := os.WriteFile(lockPath, lock, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	restored, err := fresh.Restore(RestoreOptions{Project: freshProject})
@@ -176,9 +180,75 @@ func TestGeneratedSkillOwnershipDoesNotDependOnDiscoveryOrder(t *testing.T) {
 	}
 }
 
+func TestPreferredPluginNamesFallBackWithoutBreakingLegacyOwners(t *testing.T) {
+	tests := []struct {
+		name  string
+		files func(*testing.T, string) map[string]string
+	}{
+		{
+			name: "regular and plugin",
+			files: func(t *testing.T, source string) map[string]string {
+				t.Helper()
+				regular := filepath.Join(source, "skills", "foo")
+				if err := os.MkdirAll(regular, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(regular, "SKILL.md"), []byte("REGULAR\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				plugin := writeOwnedPluginSkill(t, source, "a", "foo", "PLUGIN")
+				return map[string]string{"foo": regular, "a_foo": plugin}
+			},
+		},
+		{
+			name: "two plugins",
+			files: func(t *testing.T, source string) map[string]string {
+				t.Helper()
+				a := writeOwnedPluginSkill(t, source, "a", "foo", "PLUGIN A")
+				b := writeOwnedPluginSkill(t, source, "b", "foo", "PLUGIN B")
+				return map[string]string{"a_foo": a, "b_foo": b}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			backend, config, _ := newSourceRegressionBackend(t, t.TempDir())
+			source := t.TempDir()
+			owners := tc.files(t, source)
+			writeRegressionSource(t, config, "plugins", source)
+
+			skills, _, err := backend.ListSkills("")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(skills) != len(owners) {
+				t.Fatalf("unexpected generated skills: %+v", skills)
+			}
+			for _, skill := range skills {
+				sourceDir, exists := owners[skill.Name]
+				if !exists {
+					t.Fatalf("unexpected generated ID %q in %+v", skill.Name, skills)
+				}
+				generated, err := backend.generatedSourcePath("plugins")
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertOwnedSkill(t, filepath.Join(generated, "skills", skill.Name), sourceDir)
+			}
+		})
+	}
+}
+
 func TestOutdatedGeneratedCatalogIsRebuiltBeforeReading(t *testing.T) {
 	backend, _, _ := newSourceRegressionBackend(t, t.TempDir())
-	source := Source{Name: "plugins", Type: SourceTypeGit, Location: "https://example.invalid/plugins", Ref: "main", Catalog: "catalog/skills.tsv"}
+	source := Source{
+		Name:     "plugins",
+		Type:     SourceTypeGit,
+		Location: "https://example.invalid/plugins",
+		Ref:      "main",
+		Catalog:  defaultCatalogPath,
+	}
 	raw, err := backend.SourcePath(source)
 	if err != nil {
 		t.Fatal(err)

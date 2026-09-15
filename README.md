@@ -97,10 +97,12 @@ Generated catalogs reserve historical path-prefixed IDs before assigning shorter
 names. An existing ID never changes which skill it resolves to during update or
 restore. Plugin names containing `_` retain their path prefix, even before a
 collision exists: `a/foo` is listed as `foo` with hidden legacy alias `a_foo`,
-while `b/a_foo` remains `b_a_foo`. Hidden aliases are accepted explicitly and in
+while `b/a_foo` remains `b_a_foo`. If multiple skills prefer the same shorter
+name, historical owners keep their path-prefixed IDs instead of making the
+source unusable. Hidden aliases are accepted explicitly and in
 existing metadata/lockfiles, but are excluded from discovery and `install --all`.
-Duplicate primary names or ambiguous historical IDs are rejected, not silently
-rebound. Legacy path-prefixed installs preserve the upstream `SKILL.md` content.
+Ambiguous historical IDs are rejected, not silently rebound. Legacy path-prefixed
+installs preserve the upstream `SKILL.md` content.
 
 Older generated caches are rebuilt from the local source checkout when their
 naming-policy version changes. This does not fetch from the network; a missing

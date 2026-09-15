@@ -47,11 +47,11 @@ func githubSourceOwnerRepo(location string) (owner, repo string, ok bool) {
 	return owner, repo, true
 }
 
-func generatedSkillFlatName(sourcePath, skillFile, rel string) (string, error) {
+func generatedSkillFlatName(sourcePath, skillFile, rel string) string {
 	legacyName := strings.ReplaceAll(rel, "/", "_")
 	skillDir := filepath.Dir(skillFile)
 	if _, pluginLayout := pluginSkillRelativeDir(sourcePath, skillDir); !pluginLayout {
-		return legacyName, nil
+		return legacyName
 	}
 
 	// Canonical plugin bundles such as humanlayer/skills already satisfy the
@@ -68,9 +68,9 @@ func generatedSkillFlatName(sourcePath, skillFile, rel string) (string, error) {
 	// path-prefixed even before a collision exists, so adding another plugin
 	// later cannot reassign an already-installed shortened ID.
 	if isValidID(dirName) && !strings.Contains(dirName, "_") && frontmatterName == dirName {
-		return dirName, nil
+		return dirName
 	}
-	return legacyName, nil
+	return legacyName
 }
 
 func isGeneratedSkillCompatibilityRow(row CatalogRow) bool {

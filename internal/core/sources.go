@@ -3,7 +3,6 @@ package core
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -425,17 +424,21 @@ func (b *Backend) RemoveSource(opts SourceRemoveOptions) (string, error) {
 			return "", err
 		}
 		if len(deps) > 0 {
-			return "", fmt.Errorf("cannot remove source %s: %d installed skill(s) depend on it (use --force to remove anyway)", name, len(deps))
+			return "", fmt.Errorf(
+				"cannot remove source %s: %d installed skill(s) depend on it (use --force to remove anyway)",
+				name,
+				len(deps),
+			)
 		}
 	}
 	userFile, err := b.UserSourcesFile()
 	if err != nil {
 		return "", err
 	}
-	if err := sourcesTable.WriteFile(userFile, next); err != nil {
+	if err := b.clearSourceCache(name); err != nil {
 		return "", err
 	}
-	if err := b.clearSourceCache(name); err != nil {
+	if err := sourcesTable.WriteFile(userFile, next); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("Removed source %s from %s\n", name, userFile), nil
@@ -470,82 +473,6 @@ func (b *Backend) migrateSourceCache(oldName, newName string) {
 	if newGen, err := b.generatedSourcePath(newName); err == nil {
 		_ = os.RemoveAll(newGen)
 	}
-}
-
-func (b *Backend) migrateInstalledUsageForSource(oldName, newName string) (int, map[string]bool, error) {
-	file, err := b.InstalledRegistryFile()
-	if err != nil {
-		return 0, nil, err
-	}
-	if _, err := os.Stat(file); os.IsNotExist(err) {
-		return 0, map[string]bool{}, nil
-	}
-	rows, err := installedUsageTable.ReadFile(file)
-	if err != nil {
-		return 0, nil, err
-	}
-	updated := 0
-	affectedProjects := make(map[string]bool)
-	for i := range rows {
-		if rows[i].Source == oldName {
-			rows[i].Source = newName
-			rows[i].QualifiedSkill = newName + "/" + rows[i].Skill
-			updated++
-
-			sidecarPath := filepath.Join(rows[i].InstalledPath, ".skillhub.json")
-			if meta, ok := readMetadata(sidecarPath); ok {
-				meta.Source = newName
-				meta.QualifiedSkill = newName + "/" + meta.Skill
-				if data, err := json.MarshalIndent(meta, "", "  "); err == nil {
-					data = append(data, '\n')
-					_ = os.WriteFile(sidecarPath, data, 0o644)
-				}
-			}
-
-			if rows[i].Scope == ScopeProject && strings.TrimSpace(rows[i].ProjectPath) != "" && rows[i].ProjectPath != "-" {
-				affectedProjects[rows[i].ProjectPath] = true
-			}
-		}
-	}
-	if updated > 0 {
-		if err := installedUsageTable.WriteFile(file, rows); err != nil {
-			return 0, nil, err
-		}
-	}
-	return updated, affectedProjects, nil
-}
-
-func (b *Backend) migrateStandaloneLockfile(projectDir, oldName, newName string) (bool, error) {
-	lockPath := filepath.Join(projectDir, "skills.lock.toml")
-	data, err := os.ReadFile(lockPath)
-	if err != nil {
-		return false, nil
-	}
-	content := string(data)
-	oldSourceLine := fmt.Sprintf("source = %q", oldName)
-	newSourceLine := fmt.Sprintf("source = %q", newName)
-	if !strings.Contains(content, oldSourceLine) {
-		return false, nil
-	}
-	lines := strings.Split(content, "\n")
-	modified := false
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == oldSourceLine {
-			lines[i] = strings.Replace(line, oldSourceLine, newSourceLine, 1)
-			modified = true
-		} else if strings.HasPrefix(trimmed, "qualified_skill = ") {
-			if strings.Contains(line, "\""+oldName+"/") {
-				lines[i] = strings.Replace(line, "\""+oldName+"/", "\""+newName+"/", 1)
-				modified = true
-			}
-		}
-	}
-	if modified {
-		err := os.WriteFile(lockPath, []byte(strings.Join(lines, "\n")), 0o644)
-		return err == nil, err
-	}
-	return false, nil
 }
 
 func (b *Backend) SyncSources(name string) (string, error) {
@@ -907,7 +834,8 @@ func (b *Backend) materializeSource(sourceName, sourcePath, sourceCatalog string
 
 func missingSourceCatalogError(sourceName, sourcePath, sourceCatalog string) error {
 	return fmt.Errorf(
-		"source %s is missing catalog: %s and has no discoverable skills under %s/SKILL.md, %s/skills, %s/plugins/*/skills, or %s/*/SKILL.md",
+		"source %s is missing catalog: %s and has no discoverable skills under "+
+			"%s/SKILL.md, %s/skills, %s/plugins/*/skills, or %s/*/SKILL.md",
 		sourceName,
 		filepath.Join(sourcePath, sourceCatalog),
 		sourcePath,
@@ -921,18 +849,6 @@ func buildGeneratedCatalogRows(sourceName, sourcePath, tmpPath string, skillFile
 	return buildPlannedCatalogRows(sourceName, sourcePath, tmpPath, skillFiles)
 }
 
-func generatedCanonicalSkillNames(sourceName, sourcePath string, skillFiles []string) (map[string]bool, error) {
-	plans, err := planGeneratedSkills(sourceName, sourcePath, skillFiles)
-	if err != nil {
-		return nil, err
-	}
-	names := make(map[string]bool, len(plans))
-	for _, plan := range plans {
-		names[plan.name] = true
-	}
-	return names, nil
-}
-
 func generatedSkillIdentity(sourceName, sourcePath, skillFile string) (flatName, rel string, rootSkill, ok bool, err error) {
 	skillDir := filepath.Dir(skillFile)
 	rel = generatedSkillRelativeDir(sourcePath, skillDir)
@@ -943,10 +859,7 @@ func generatedSkillIdentity(sourceName, sourcePath, skillFile string) (flatName,
 	if hasHiddenPathSegment(rel) {
 		return "", rel, rootSkill, false, nil
 	}
-	flatName, err = generatedSkillFlatName(sourcePath, skillFile, rel)
-	if err != nil {
-		return "", rel, rootSkill, false, err
-	}
+	flatName = generatedSkillFlatName(sourcePath, skillFile, rel)
 	if !isValidID(flatName) {
 		return "", rel, rootSkill, false, fmt.Errorf("invalid generated skill name from %s: %s", rel, flatName)
 	}
@@ -1039,6 +952,7 @@ func (b *Backend) sourceHasDiscoverableSkills(sourcePath string) bool {
 	return err == nil && len(files) > 0
 }
 
+//nolint:gocognit // Discovery intentionally covers each documented source layout in one ordered pass.
 func discoverSkillFiles(sourcePath string) ([]string, error) {
 	files := []string{}
 	rootSkill := filepath.Join(sourcePath, "SKILL.md")

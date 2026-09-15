@@ -19,6 +19,7 @@ import (
 
 const (
 	testArgAdd         = "add"
+	testCommandInstall = "install"
 	testCommandSkills  = "skills"
 	testCommandSources = "sources"
 	testCommandTargets = "targets"
@@ -192,8 +193,8 @@ func commandCLIArgs(command string, args ...string) ([]string, error) {
 		return append([]string{testCommandSources}, args...), nil
 	case "source":
 		return append([]string{"source"}, args...), nil
-	case "install":
-		return append([]string{"install"}, args...), nil
+	case testCommandInstall:
+		return append([]string{testCommandInstall}, args...), nil
 	case "installed":
 		return append([]string{"installed"}, args...), nil
 	case testCommandTargets:
@@ -1474,7 +1475,8 @@ func TestSourcesRenameUpdatesDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read lockfile: %v", err)
 	}
-	if !strings.Contains(string(lockData), `source = "new-name"`) || !strings.Contains(string(lockData), `qualified_skill = "new-name/rename-rules"`) {
+	if !strings.Contains(string(lockData), `source = "new-name"`) ||
+		!strings.Contains(string(lockData), `qualified_skill = "new-name/rename-rules"`) {
 		t.Fatalf("lockfile content incorrect: %s", string(lockData))
 	}
 }
@@ -1859,7 +1861,9 @@ func TestRootSkillFileSourceNormalizesSourceNameAndInstalls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("skills list root skill file failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "uncodixfy\tuncodixfy\tuncodixfy\tuncodixfy\tPrevents generic AI UI patterns. Use http://example.test and note: keep text.") {
+	wantRootSkill := "uncodixfy\tuncodixfy\tuncodixfy\tuncodixfy\t" +
+		"Prevents generic AI UI patterns. Use http://example.test and note: keep text."
+	if !strings.Contains(stdout, wantRootSkill) {
 		t.Fatalf("expected root SKILL.md generated row, got stdout:\n%s\nstderr:\n%s", stdout, stderr)
 	}
 
@@ -1905,8 +1909,12 @@ func TestPluginBundleSourceCanBeAddedListedSearchedAndInstalled(t *testing.T) {
 		t.Fatalf("skills list plugin bundle failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
 	for _, want := range []string{
-		"stitch-skills\tstitch-design_generate-design\tstitch-design\tstitch-design,generate-design,stitch::generate-design\tGenerate new screens from text prompts or images with design system tokens.",
-		"stitch-skills\tstitch-build_react-components\tstitch-build\tstitch-build,react-components,react:components\tConverts Stitch designs into modular Vite and React components.",
+		"stitch-skills\tstitch-design_generate-design\tstitch-design\t" +
+			"stitch-design,generate-design,stitch::generate-design\t" +
+			"Generate new screens from text prompts or images with design system tokens.",
+		"stitch-skills\tstitch-build_react-components\tstitch-build\t" +
+			"stitch-build,react-components,react:components\t" +
+			"Converts Stitch designs into modular Vite and React components.",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("expected plugin bundle generated row %q, got stdout:\n%s\nstderr:\n%s", want, stdout, stderr)

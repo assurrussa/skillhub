@@ -32,17 +32,17 @@ const (
 	TargetPurposeInstall  = targetPurposeInstall
 	TargetStatusSupported = targetStatusSupported
 
-	ViewSkills           = viewSkills
-	ViewInstalled        = viewInstalled
-	ViewSources          = viewSources
-	ViewDefaults         = viewDefaults
-	ViewAddSource        = viewAddSource
-	ViewDetails          = viewDetails
-	ViewInstalledDetails = viewInstalledDetails
-	ViewTargets          = viewTargets
-	ViewInstallScope     = viewInstallScope
-	ViewInstallConfirm   = viewInstallConfirm
-	ViewInstallResult    = viewInstallResult
+	ViewSkills              = viewSkills
+	ViewInstalled           = viewInstalled
+	ViewSources             = viewSources
+	ViewDefaults            = viewDefaults
+	ViewAddSource           = viewAddSource
+	ViewDetails             = viewDetails
+	ViewInstalledDetails    = viewInstalledDetails
+	ViewTargets             = viewTargets
+	ViewInstallScope        = viewInstallScope
+	ViewInstallConfirm      = viewInstallConfirm
+	ViewInstallResult       = viewInstallResult
 	ViewConfirmDelete       = viewConfirmDelete
 	ViewConfirmRemoveSource = viewConfirmRemoveSource
 	ViewRenameSource        = viewRenameSource
@@ -108,16 +108,16 @@ type TestModel struct {
 	PostReloadStatus      string
 	SpinnerFrame          int
 
-	InstallScope       string
-	InstallScopeCursor int
-	ProjectDir         string
-	TargetPurpose      string
-	TargetChoices      []InstallTargetChoice
-	SelectedTargets    map[string]bool
-	PendingInstall     InstallResult
-	InstallResult      InstallResult
-	InstallProgress    TestInstallProgress
-	SourceProgress     TestSourceProgress
+	InstallScope            string
+	InstallScopeCursor      int
+	ProjectDir              string
+	TargetPurpose           string
+	TargetChoices           []InstallTargetChoice
+	SelectedTargets         map[string]bool
+	PendingInstall          InstallResult
+	InstallResult           InstallResult
+	InstallProgress         TestInstallProgress
+	SourceProgress          TestSourceProgress
 	PendingUninstall        InstalledSkill
 	PendingRemoveSource     SourcePreset
 	PendingRemoveSourceDeps int
@@ -380,12 +380,12 @@ func testModelFromModel(m model) TestModel {
 		PostReloadStatus:      m.postReloadStatus,
 		SpinnerFrame:          m.spinnerFrame,
 
-		InstallScope:       m.install.scope,
-		InstallScopeCursor: m.install.scopeCursor,
-		ProjectDir:         m.projectDir,
-		TargetPurpose:      m.install.targetPurpose,
-		TargetChoices:      m.install.targetChoices,
-		SelectedTargets:    m.install.selectedTargets,
+		InstallScope:            m.install.scope,
+		InstallScopeCursor:      m.install.scopeCursor,
+		ProjectDir:              m.projectDir,
+		TargetPurpose:           m.install.targetPurpose,
+		TargetChoices:           m.install.targetChoices,
+		SelectedTargets:         m.install.selectedTargets,
 		PendingInstall:          m.install.pending,
 		InstallResult:           m.install.result,
 		InstallProgress:         m.install.progress,

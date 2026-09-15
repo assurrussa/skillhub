@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	ruleSelector = "rules-selector"
-	testEnvHome  = "HOME"
+	ruleSelector    = "rules-selector"
+	testEnvHome     = "HOME"
+	testSourceLocal = "local"
 )
 
 func writeCoreRepo(t *testing.T, root string) {
@@ -256,10 +257,10 @@ func TestCoreListSourceStatusesReturnsFreshStaleMissingLocal(t *testing.T) {
 		got[status.Name] = status.Status
 	}
 	want := map[string]string{
-		"local":   core.SourceStatusLocal,
-		"fresh":   core.SourceStatusFresh,
-		"stale":   core.SourceStatusStale,
-		"missing": core.SourceStatusMissing,
+		testSourceLocal: core.SourceStatusLocal,
+		"fresh":         core.SourceStatusFresh,
+		"stale":         core.SourceStatusStale,
+		"missing":       core.SourceStatusMissing,
 	}
 	for name, status := range want {
 		if got[name] != status {
@@ -994,7 +995,7 @@ func TestCoreRemoveSourceGuardsDependencies(t *testing.T) {
 	}
 
 	// 1. Guard check without force
-	_, err = backend.RemoveSource(core.SourceRemoveOptions{Name: "local", Force: false})
+	_, err = backend.RemoveSource(core.SourceRemoveOptions{Name: testSourceLocal, Force: false})
 	if err == nil {
 		t.Fatalf("expected error when removing source with dependencies without force")
 	}
@@ -1009,7 +1010,7 @@ func TestCoreRemoveSourceGuardsDependencies(t *testing.T) {
 	}
 
 	// 2. Remove with force
-	out, err := backend.RemoveSource(core.SourceRemoveOptions{Name: "local", Force: true})
+	out, err := backend.RemoveSource(core.SourceRemoveOptions{Name: testSourceLocal, Force: true})
 	if err != nil {
 		t.Fatalf("remove with force failed: %v", err)
 	}
@@ -1024,6 +1025,8 @@ func TestCoreRemoveSourceGuardsDependencies(t *testing.T) {
 }
 
 func TestCoreRenameSourceUpdatesDependencies(t *testing.T) {
+	const renamedSource = "omega"
+
 	tmp := t.TempDir()
 	repo := filepath.Join(tmp, "repo")
 	configDir := filepath.Join(tmp, "config")
@@ -1059,25 +1062,25 @@ func TestCoreRenameSourceUpdatesDependencies(t *testing.T) {
 	}
 
 	// Error test: invalid new name
-	_, err = backend.RenameSource(core.SourceRenameOptions{OldName: "local", NewName: "bad/name"})
+	_, err = backend.RenameSource(core.SourceRenameOptions{OldName: testSourceLocal, NewName: "bad/name"})
 	if err == nil || !strings.Contains(err.Error(), "invalid new source name") {
 		t.Fatalf("expected invalid name error, got: %v", err)
 	}
 
 	// Error test: same name
-	_, err = backend.RenameSource(core.SourceRenameOptions{OldName: "local", NewName: "local"})
+	_, err = backend.RenameSource(core.SourceRenameOptions{OldName: testSourceLocal, NewName: testSourceLocal})
 	if err == nil || !strings.Contains(err.Error(), "must be different") {
 		t.Fatalf("expected same name error, got: %v", err)
 	}
 
 	// Error test: non-existent
-	_, err = backend.RenameSource(core.SourceRenameOptions{OldName: "ghost", NewName: "omega"})
+	_, err = backend.RenameSource(core.SourceRenameOptions{OldName: "ghost", NewName: renamedSource})
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("expected not found error, got: %v", err)
 	}
 
 	// Successful rename: local -> omega
-	summary, err := backend.RenameSource(core.SourceRenameOptions{OldName: "local", NewName: "omega"})
+	summary, err := backend.RenameSource(core.SourceRenameOptions{OldName: testSourceLocal, NewName: renamedSource})
 	if err != nil {
 		t.Fatalf("rename failed: %v", err)
 	}
@@ -1090,7 +1093,7 @@ func TestCoreRenameSourceUpdatesDependencies(t *testing.T) {
 
 	// 1. Verify sources.tsv
 	sources, err := backend.ListSources()
-	if err != nil || len(sources) != 1 || sources[0].Name != "omega" {
+	if err != nil || len(sources) != 1 || sources[0].Name != renamedSource {
 		t.Fatalf("expected source omega, got: %#v", sources)
 	}
 
@@ -1100,7 +1103,7 @@ func TestCoreRenameSourceUpdatesDependencies(t *testing.T) {
 		t.Fatalf("read usage: %v", err)
 	}
 	for _, row := range usage {
-		if row.Source != "omega" {
+		if row.Source != renamedSource {
 			t.Fatalf("expected usage row source omega, got: %#v", row)
 		}
 		if !strings.HasPrefix(row.QualifiedSkill, "omega/") {
@@ -1114,7 +1117,8 @@ func TestCoreRenameSourceUpdatesDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read sidecar: %v", err)
 	}
-	if !strings.Contains(string(data), `"source": "omega"`) || !strings.Contains(string(data), `"qualified_skill": "omega/rules-selector"`) {
+	if !strings.Contains(string(data), `"source": "omega"`) ||
+		!strings.Contains(string(data), `"qualified_skill": "omega/rules-selector"`) {
 		t.Fatalf("sidecar was not updated properly: %s", string(data))
 	}
 
@@ -1124,7 +1128,8 @@ func TestCoreRenameSourceUpdatesDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read lockfile: %v", err)
 	}
-	if !strings.Contains(string(lockData), `source = "omega"`) || !strings.Contains(string(lockData), `qualified_skill = "omega/rules-selector"`) {
+	if !strings.Contains(string(lockData), `source = "omega"`) ||
+		!strings.Contains(string(lockData), `qualified_skill = "omega/rules-selector"`) {
 		t.Fatalf("lockfile was not updated properly: %s", string(lockData))
 	}
 }

@@ -38,25 +38,11 @@ func (b *Backend) ListSkills(query string) ([]Skill, string, error) {
 			continue
 		}
 		loadedSources++
-		for _, row := range rows {
-			if b.shouldHideGeneratedSkillCompatibilityRow(source, sourcePath, row) {
-				continue
-			}
-			if !isValidID(row.Name) {
-				return nil, warnings.String(), fmt.Errorf("invalid catalog skill name from %s: %s", source.Name, row.Name)
-			}
-			skill := Skill{
-				Source:      source.Name,
-				Name:        row.Name,
-				Category:    row.Category,
-				Triggers:    row.Triggers,
-				Description: row.Description,
-			}
-			if query != "" && !skillMatches(skill, query) {
-				continue
-			}
-			out = append(out, skill)
+		sourceSkills, err := b.visibleCatalogSkills(source, sourcePath, rows, query)
+		if err != nil {
+			return nil, warnings.String(), err
 		}
+		out = append(out, sourceSkills...)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Source != out[j].Source {
@@ -77,6 +63,29 @@ func (b *Backend) ListSkills(query string) ([]Skill, string, error) {
 		return nil, warnings.String(), errors.New("no skills found")
 	}
 	return out, warnings.String(), nil
+}
+
+func (b *Backend) visibleCatalogSkills(source Source, sourcePath string, rows []CatalogRow, query string) ([]Skill, error) {
+	result := make([]Skill, 0, len(rows))
+	for _, row := range rows {
+		if b.shouldHideGeneratedSkillCompatibilityRow(source, sourcePath, row) {
+			continue
+		}
+		if !isValidID(row.Name) {
+			return nil, fmt.Errorf("invalid catalog skill name from %s: %s", source.Name, row.Name)
+		}
+		skill := Skill{
+			Source:      source.Name,
+			Name:        row.Name,
+			Category:    row.Category,
+			Triggers:    row.Triggers,
+			Description: row.Description,
+		}
+		if query == "" || skillMatches(skill, query) {
+			result = append(result, skill)
+		}
+	}
+	return result, nil
 }
 
 func allSourceCatalogsUnavailableError(sourceErrors []error) error {

@@ -269,7 +269,7 @@ func (m model) updateCommandDone(msg commandDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.action == "Install" && len(m.install.pending.Targets) > 0 {
 		return m.finishPendingInstall()
 	}
-	if msg.action == "Remove source" || msg.action == "Rename source" {
+	if msg.action == actionRemoveSource || msg.action == actionRenameSource {
 		m.completeSuccessfulSourceAction(msg.action, msg.renameSummary)
 	}
 	successStatus := msg.action + " complete."
@@ -295,7 +295,7 @@ func installCompleteStatus(result InstallResult) string {
 }
 
 func (m model) afterCommandSuccess(action, successStatus string) (tea.Model, tea.Cmd) {
-	if action == "Remove source" || action == "Rename source" {
+	if action == actionRemoveSource || action == actionRenameSource {
 		m.reloadOnFinish = false
 		m.loading = true
 		m.viewMode = viewSources
@@ -986,7 +986,7 @@ func (m model) updateSourcesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "u":
 		source, ok := m.currentSource()
 		if !ok {
-			m.status = "No source selected."
+			m.status = statusNoSourceSelected
 			return m, nil
 		}
 		return m.startSourceSyncProgress([]SourcePreset{source})
@@ -999,7 +999,7 @@ func (m model) updateSourcesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "x":
 		source, ok := m.currentSource()
 		if !ok {
-			m.status = "No source selected."
+			m.status = statusNoSourceSelected
 			return m, nil
 		}
 		m.pendingRemoveSource = source
@@ -1010,7 +1010,7 @@ func (m model) updateSourcesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "e", "R":
 		source, ok := m.currentSource()
 		if !ok {
-			m.status = "No source selected."
+			m.status = statusNoSourceSelected
 			return m, nil
 		}
 		m.pendingRenameSource = source
@@ -1039,14 +1039,14 @@ func (m model) updateConfirmRemoveSourceKey(msg tea.KeyMsg) (tea.Model, tea.Cmd)
 	case keyEnter, "y":
 		if strings.TrimSpace(m.pendingRemoveSource.Name) == "" {
 			m.viewMode = viewSources
-			m.status = "No source selected."
+			m.status = statusNoSourceSelected
 			return m, nil
 		}
 		source := m.pendingRemoveSource
 		m.busy = true
 		m.reloadOnFinish = true
 		m.status = "Removing source " + source.Name + "..."
-		cmd := runSourceCommand(m.repoRoot, "Remove source", "remove", source.Name, "--force")
+		cmd := runSourceCommand(m.repoRoot, actionRemoveSource, commandRemove, source.Name, "--force")
 		return m, tea.Batch(cmd, busyTick())
 	default:
 		return m, nil
@@ -1093,7 +1093,7 @@ func (m model) updateRenameSourceKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.busy = true
 		m.reloadOnFinish = true
 		m.status = fmt.Sprintf("Renaming source %s to %s...", source.Name, newName)
-		cmd := runSourceCommand(m.repoRoot, "Rename source", "rename", source.Name, newName)
+		cmd := runSourceCommand(m.repoRoot, actionRenameSource, commandRename, source.Name, newName)
 		return m, tea.Batch(cmd, busyTick())
 	default:
 		return m, nil

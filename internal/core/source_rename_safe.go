@@ -32,6 +32,7 @@ type sourceSkillRename struct {
 	Enabled  bool
 }
 
+//nolint:gocognit,gocyclo // Keeping transaction preparation and rollback order together makes failure handling auditable.
 func (b *Backend) renameSourceSafely(opts SourceRenameOptions) (SourceRenameSummary, error) {
 	oldName := normalizeSourceName(opts.OldName)
 	newName := normalizeSourceName(opts.NewName)
@@ -308,10 +309,37 @@ func (b *Backend) aliasDerivedRootSkillRename(source Source, oldName, newName st
 	if err != nil {
 		return sourceSkillRename{}, err
 	}
-	if _, err := generatedCanonicalSkillNames(newName, sourcePath, skillFiles); err != nil {
+	if err := validateGeneratedSkillRename(oldName, newName, sourcePath, skillFiles); err != nil {
 		return sourceSkillRename{}, fmt.Errorf("cannot rename source %s to %s: %w", oldName, newName, err)
 	}
 	return sourceSkillRename{OldSkill: oldSkill, NewSkill: newSkill, Enabled: true}, nil
+}
+
+func validateGeneratedSkillRename(oldName, newName, sourcePath string, skillFiles []string) error {
+	oldPlans, err := planGeneratedSkills(oldName, sourcePath, skillFiles)
+	if err != nil {
+		return err
+	}
+	newPlans, err := planGeneratedSkills(newName, sourcePath, skillFiles)
+	if err != nil {
+		return err
+	}
+	oldIDs := make(map[string]string, len(oldPlans))
+	for _, plan := range oldPlans {
+		oldIDs[plan.file] = plan.name
+	}
+	for _, plan := range newPlans {
+		if plan.root || oldIDs[plan.file] == plan.name {
+			continue
+		}
+		return fmt.Errorf(
+			"renaming the root skill would change %s from %s to %s",
+			plan.rel,
+			oldIDs[plan.file],
+			plan.name,
+		)
+	}
+	return nil
 }
 
 func renamedInstalledSkillPath(path, oldSkill, newSkill string) (string, error) {
@@ -415,6 +443,7 @@ func renamedSourceMetadata(snapshot sourceRenameSnapshot, row InstalledSkill, ne
 	return append(data, '\n'), nil
 }
 
+//nolint:gocognit // The line-preserving lockfile rewrite deliberately handles every field in one block state machine.
 func rewriteLockfileSource(data []byte, oldName, newName string, skillRenames ...sourceSkillRename) ([]byte, bool) {
 	lines := strings.Split(string(data), "\n")
 	rename := sourceSkillRename{}
@@ -537,7 +566,7 @@ func rollbackSourceRename(cause error, snapshots map[string]sourceRenameSnapshot
 		}
 	}
 	if rollbackErr != nil {
-		return fmt.Errorf("source rename failed: %w; rollback also failed: %v", cause, rollbackErr)
+		return fmt.Errorf("source rename failed: %w; rollback also failed: %w", cause, rollbackErr)
 	}
 	return cause
 }

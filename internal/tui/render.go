@@ -141,7 +141,7 @@ func (m model) renderBody(width int) string {
 		return m.renderPanel("Confirm remove source", m.sourcesSection().confirmRemoveContent(width-6), width)
 	}
 	if m.viewMode == viewRenameSource {
-		return m.renderPanel("Rename source", m.sourcesSection().renameContent(width-6), width)
+		return m.renderPanel(actionRenameSource, m.sourcesSection().renameContent(width-6), width)
 	}
 	if m.viewMode == viewInstallScope {
 		return m.renderPanel("Install scope", m.installFlow().scopeContent(width-6), width)
@@ -1041,7 +1041,7 @@ func (m model) helpContent(width int) string {
 func (m model) confirmRemoveSourceContent(width int) string {
 	source := m.pendingRemoveSource
 	if strings.TrimSpace(source.Name) == "" {
-		return "No source selected."
+		return statusNoSourceSelected
 	}
 	lines := []string{
 		titleStyle.Render("Remove skill source?"),
@@ -1070,7 +1070,7 @@ func (m model) confirmRemoveSourceContent(width int) string {
 func (m model) renameSourceContent(width int) string {
 	source := m.pendingRenameSource
 	if strings.TrimSpace(source.Name) == "" {
-		return "No source selected."
+		return statusNoSourceSelected
 	}
 	nameCursor := "_"
 	lines := []string{
@@ -1189,7 +1189,8 @@ func (m model) helpText() string {
 		return "1-3/left-right sections  j/k move  enter locations  u update single  x uninstall single  r reload  ? help  q quit"
 	}
 	if m.viewMode == viewSources {
-		return "1-3/left-right sections  j/k move  u update source  U/s update all  d presets  n custom  e rename  x remove  r reload  ? help  q quit"
+		return "1-3/left-right sections  j/k move  u update source  U/s update all  " +
+			"d presets  n custom  e rename  x remove  r reload  ? help  q quit"
 	}
 	if m.viewMode == viewTargets {
 		if m.install.targetPurpose == targetPurposeInstall {

@@ -10,7 +10,7 @@ import (
 
 func (m *model) completeSuccessfulSourceAction(action string, summaries ...core.SourceRenameSummary) {
 	switch action {
-	case "Rename source":
+	case actionRenameSource:
 		oldName := strings.TrimSpace(m.pendingRenameSource.Name)
 		newName := strings.ToLower(strings.TrimSpace(m.sourceRenameInput))
 		if oldName != "" && newName != "" && oldName != newName {
@@ -23,7 +23,7 @@ func (m *model) completeSuccessfulSourceAction(action string, summaries ...core.
 		m.pendingRenameSource = SourcePreset{}
 		m.pendingRenameSourceDeps = 0
 		m.sourceRenameInput = ""
-	case "Remove source":
+	case actionRemoveSource:
 		name := strings.TrimSpace(m.pendingRemoveSource.Name)
 		if name != "" {
 			m.removeSelectedSource(name)
@@ -62,7 +62,7 @@ func (m model) updateSourcesKeySafe(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "x":
 		source, ok := m.currentSource()
 		if !ok {
-			m.status = "No source selected."
+			m.status = statusNoSourceSelected
 			return m, nil
 		}
 		deps, err := m.sourceDependencyCount(source.Name)
@@ -78,7 +78,7 @@ func (m model) updateSourcesKeySafe(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "e", "R":
 		source, ok := m.currentSource()
 		if !ok {
-			m.status = "No source selected."
+			m.status = statusNoSourceSelected
 			return m, nil
 		}
 		deps, err := m.sourceDependencyCount(source.Name)
